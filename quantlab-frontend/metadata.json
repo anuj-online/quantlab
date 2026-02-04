@@ -1,0 +1,5 @@
+{
+  "name": "QuantLab Strategy Researcher",
+  "description": "A research-focused quantitative trading strategy simulator and backtesting dashboard with detailed analytics and signal tracking.",
+  "requestFramePermissions": []
+}
