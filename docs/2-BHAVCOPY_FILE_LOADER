@@ -1,0 +1,144 @@
+Bhavcopy Mapping Instructions (Final, Precise)
+
+File is Full Bhavcopy + Deliverables
+
+One trading day per file
+file naming convention: sec_bhavdata_full_01022026.csv -> sec_bhavdata_full_DDMMYYYY.csv -> 01-Feb-2026
+
+You already:
+
+Have DB schema
+
+Have API + UI wired
+
+Have file present locally (no downloading logic now)
+
+CSV Headers (Confirmed)
+SYMBOL
+SERIES
+DATE1
+PREV_CLOSE
+OPEN_PRICE
+HIGH_PRICE
+LOW_PRICE
+LAST_PRICE
+CLOSE_PRICE
+AVG_PRICE
+TTL_TRD_QNTY
+TURNOVER_LACS
+NO_OF_TRADES
+DELIV_QTY
+DELIV_PER
+
+Filtering Rules (STRICT)
+
+Process a row only if:
+
+SERIES = 'EQ'
+
+
+Ignore:
+
+GS (Govt Securities)
+
+BE, BL, IL, etc.
+
+This keeps equity-only universe clean.
+
+Mapping → Existing Tables
+1. instrument table
+CSV	DB
+SYMBOL	instrument.symbol
+—	instrument.market = 'INDIA'
+—	instrument.active = true
+
+Rules:
+
+Lookup by (symbol, market)
+
+Insert only if missing
+
+Never update symbol name from bhavcopy
+
+2. candle table
+CSV	DB
+DATE1	candle.trade_date
+OPEN_PRICE	candle.open
+HIGH_PRICE	candle.high
+LOW_PRICE	candle.low
+CLOSE_PRICE	candle.close
+TTL_TRD_QNTY	candle.volume
+
+❗ Explicitly ignore:
+
+LAST_PRICE
+
+AVG_PRICE
+
+TURNOVER_LACS
+
+NO_OF_TRADES
+
+DELIV_QTY
+
+DELIV_PER
+
+PREV_CLOSE
+
+Date Handling (IMPORTANT)
+
+CSV DATE1 format: dd-MMM-yyyy
+
+Parse into LocalDate
+
+Use exact same date for all rows
+
+Insert Rules (Idempotent)
+
+Candle uniqueness:
+
+(instrument_id, trade_date)
+
+
+Insertion behavior:
+
+If exists → skip
+
+If not → insert
+
+No updates. Ever.
+
+Minimal Loader Algorithm (what Claude should do)
+for each CSV row:
+  if SERIES != 'EQ': continue
+
+  instrument = find_or_create(symbol, INDIA)
+
+  if candle_exists(instrument, DATE1):
+      continue
+
+  insert candle(
+    instrument_id,
+    trade_date,
+    open,
+    high,
+    low,
+    close,
+    volume
+  )
+
+Logging (do not skip)
+
+Log per run:
+
+Trading date
+
+Total rows read
+
+EQ rows processed
+
+Instruments created
+
+Candles inserted
+
+Candles skipped

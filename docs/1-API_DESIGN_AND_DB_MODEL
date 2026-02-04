@@ -1,0 +1,234 @@
+Data Model (Logical + DB-oriented)
+1. Instrument
+instrument
+- id (PK)
+- symbol (varchar, unique per market)
+- name
+- market (INDIA | US)
+- active (boolean)
+- created_at
+
+
+Purpose: symbol universe control
+
+2. Candle (Daily OHLCV)
+candle
+- id (PK)
+- instrument_id (FK)
+- trade_date (date)
+- open
+- high
+- low
+- close
+- volume
+
+
+Constraints:
+
+unique (instrument_id, trade_date)
+
+EOD only
+
+3. Strategy
+strategy
+- id (PK)
+- code (varchar, unique)   // e.g. EMA_CROSS
+- name
+- description
+- active
+
+
+Static reference table.
+
+4. Strategy Run
+
+Represents one execution of a strategy with params.
+
+strategy_run
+- id (PK)
+- strategy_id (FK)
+- market
+- params_json
+- start_date
+- end_date
+- run_timestamp
+
+
+Used for replay & comparison.
+
+5. Trade Signal
+trade_signal
+- id (PK)
+- strategy_run_id (FK)
+- instrument_id (FK)
+- signal_date
+- side (BUY | SELL)
+- entry_price
+- stop_loss
+- target_price
+- quantity
+
+
+Signals ≠ trades.
+
+6. Paper Trade (Closed trades only)
+paper_trade
+- id (PK)
+- strategy_run_id (FK)
+- instrument_id (FK)
+- entry_date
+- entry_price
+- exit_date
+- exit_price
+- quantity
+- pnl
+- pnl_pct
+
+7. Paper Position (Optional, for open trades)
+paper_position
+- id (PK)
+- strategy_run_id (FK)
+- instrument_id (FK)
+- entry_date
+- entry_price
+- quantity
+- stop_loss
+- target_price
+- status (OPEN | CLOSED)
+
+2️⃣ API Definitions (REST, v1)
+
+Base path:
+
+/api/v1
+
+1. List Instruments
+
+GET /instruments
+
+Query params
+
+market=INDIA|US
+active=true
+
+
+Response
+
+[
+  {
+    "id": 1,
+    "symbol": "INFY",
+    "market": "INDIA"
+  }
+]
+
+2. List Strategies
+
+GET /strategies
+
+Response
+
+[
+  {
+    "id": 1,
+    "code": "EMA_CROSS",
+    "name": "EMA Crossover"
+  }
+]
+
+3. Run Strategy (core action)
+
+POST /strategies/run
+
+Request
+
+{
+  "strategyCode": "EMA_CROSS",
+  "market": "INDIA",
+  "startDate": "2021-01-01",
+  "endDate": "2024-12-31",
+  "params": {
+    "fastEma": 20,
+    "slowEma": 50,
+    "riskPerTrade": 0.01
+  }
+}
+
+
+Response
+
+{
+  "strategyRunId": 42,
+  "status": "COMPLETED"
+}
+
+4. Get Trade Signals
+
+GET /strategy-runs/{id}/signals
+
+Response
+
+[
+  {
+    "symbol": "AAPL",
+    "signalDate": "2024-05-10",
+    "side": "BUY",
+    "entryPrice": 182.3,
+    "stopLoss": 175.0,
+    "targetPrice": 200.0,
+    "quantity": 10
+  }
+]
+
+5. Get Paper Trades
+
+GET /strategy-runs/{id}/paper-trades
+
+Response
+
+[
+  {
+    "symbol": "AAPL",
+    "entryDate": "2024-05-11",
+    "exitDate": "2024-06-02",
+    "entryPrice": 183.0,
+    "exitPrice": 198.0,
+    "quantity": 10,
+    "pnl": 150.0,
+    "pnlPct": 8.2
+  }
+]
+
+6. Analytics Summary
+
+GET /strategy-runs/{id}/analytics
+
+Response
+
+{
+  "totalTrades": 120,
+  "winRate": 0.56,
+  "totalPnl": 12450,
+  "maxDrawdown": -0.18
+}
+
+7. Equity Curve
+
+GET /strategy-runs/{id}/equity-curve
+
+Response
+
+[
+  { "date": "2024-01-01", "equity": 100000 },
+  { "date": "2024-02-01", "equity": 104500 }
+]
+
+Design Rules (important for Claude)
+
+APIs are stateless
+
+Strategy runs are immutable
+
+Re-running = new strategy_run
+
+Frontend never computes business logic
