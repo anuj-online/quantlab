@@ -3,8 +3,11 @@ package com.quantlab.backend.strategy.impl;
 import com.quantlab.backend.domain.TradeSignal;
 import com.quantlab.backend.entity.Candle;
 import com.quantlab.backend.entity.Side;
+import com.quantlab.backend.strategy.ExecutionMode;
 import com.quantlab.backend.strategy.Strategy;
+import com.quantlab.backend.strategy.StrategyContext;
 import com.quantlab.backend.strategy.StrategyParams;
+import com.quantlab.backend.strategy.StrategyResult;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -121,6 +124,117 @@ public class GapUpMomentumStrategy implements Strategy {
         }
 
         return signals;
+    }
+
+    /**
+     * Evaluates the strategy using the new context-based API.
+     * <p>
+     * This method supports both BACKTEST and SCREEN execution modes:
+     * <ul>
+     *   <li>BACKTEST: Generates signals across all historical candles</li>
+     *   <li>SCREEN: Only checks if gap up occurred on latest candle for next-day action</li>
+     * </ul>
+     *
+     * @param context Strategy context containing candles, mode, and parameters
+     * @return StrategyResult with signals and actionable status
+     */
+    @Override
+    public StrategyResult evaluate(StrategyContext context) {
+        List<Candle> candles = context.getCandles();
+        StrategyParams params = context.getParams();
+
+        // Validate input
+        if (candles == null || candles.isEmpty()) {
+            throw new IllegalArgumentException("Candles list cannot be null or empty");
+        }
+
+        // Get parameters with defaults
+        final double gapThreshold = params.getDouble("gapPercent", 0.02);
+
+        // Validate parameters
+        if (gapThreshold <= 0) {
+            throw new IllegalArgumentException("gapPercent must be positive");
+        }
+        if (gapThreshold >= 1) {
+            throw new IllegalArgumentException("gapPercent should be less than 1 (100%)");
+        }
+
+        List<TradeSignal> signals = new ArrayList<>();
+
+        // Need at least 2 candles (previous day and current day)
+        if (candles.size() < 2) {
+            return StrategyResult.empty(context.isScreening());
+        }
+
+        // In SCREEN mode, only evaluate the latest candle
+        if (context.isScreening()) {
+            int latestIndex = candles.size() - 1;
+            Candle today = candles.get(latestIndex);
+            Candle yesterday = candles.get(latestIndex - 1);
+
+            if (!isValidCandle(today) || !isValidCandle(yesterday)) {
+                return StrategyResult.empty(true);
+            }
+
+            // Calculate gap percentage
+            BigDecimal prevClose = yesterday.getClose();
+            BigDecimal todayOpen = today.getOpen();
+
+            BigDecimal gapPercent = todayOpen.subtract(prevClose)
+                .divide(prevClose, 4, RoundingMode.HALF_UP);
+
+            if (gapPercent.doubleValue() >= gapThreshold) {
+                BigDecimal entryPrice = todayOpen;
+                BigDecimal stopLoss = entryPrice.multiply(STOP_LOSS_MULTIPLIER)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+                TradeSignal signal = TradeSignal.fromCandle(
+                    today,
+                    Side.BUY,
+                    entryPrice,
+                    stopLoss,
+                    null,
+                    1
+                );
+                return StrategyResult.actionable(List.of(signal));
+            }
+
+            return StrategyResult.empty(true);
+        }
+
+        // BACKTEST mode: process all candles
+        for (int i = 1; i < candles.size(); i++) {
+            Candle today = candles.get(i);
+            Candle yesterday = candles.get(i - 1);
+
+            if (!isValidCandle(today) || !isValidCandle(yesterday)) {
+                continue;
+            }
+
+            BigDecimal prevClose = yesterday.getClose();
+            BigDecimal todayOpen = today.getOpen();
+
+            BigDecimal gapPercent = todayOpen.subtract(prevClose)
+                .divide(prevClose, 4, RoundingMode.HALF_UP);
+
+            if (gapPercent.doubleValue() >= gapThreshold) {
+                BigDecimal entryPrice = todayOpen;
+                BigDecimal stopLoss = entryPrice.multiply(STOP_LOSS_MULTIPLIER)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+                TradeSignal signal = TradeSignal.fromCandle(
+                    today,
+                    Side.BUY,
+                    entryPrice,
+                    stopLoss,
+                    null,
+                    1
+                );
+                signals.add(signal);
+            }
+        }
+
+        return StrategyResult.nonActionable(signals);
     }
 
     /**

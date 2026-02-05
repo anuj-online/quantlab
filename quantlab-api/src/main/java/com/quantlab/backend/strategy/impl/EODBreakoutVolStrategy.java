@@ -3,8 +3,11 @@ package com.quantlab.backend.strategy.impl;
 import com.quantlab.backend.domain.TradeSignal;
 import com.quantlab.backend.entity.Candle;
 import com.quantlab.backend.entity.Side;
+import com.quantlab.backend.strategy.ExecutionMode;
 import com.quantlab.backend.strategy.Strategy;
+import com.quantlab.backend.strategy.StrategyContext;
 import com.quantlab.backend.strategy.StrategyParams;
+import com.quantlab.backend.strategy.StrategyResult;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -16,7 +19,7 @@ import java.util.OptionalDouble;
 /**
  * End-of-Day Breakout with Volume Confirmation Strategy.
  * <p>
- * Strategy Code: EMA_BREAKOUT
+ * Strategy Code: EOD_BREAKOUT
  * <p>
  * This strategy identifies breakouts from recent price highs with volume confirmation.
  * It's designed to capture momentum moves when price breaks out of consolidation
@@ -39,20 +42,30 @@ import java.util.OptionalDouble;
  *   <li>lookbackDays: Number of days for high/low calculation (default: 20)</li>
  *   <li>volumeMultiplier: Minimum volume ratio (default: 1.5)</li>
  * </ul>
+ * <p>
+ * Execution Modes:
+ * <ul>
+ *   <li>BACKTEST - Generates signals for all valid points in historical data</li>
+ *   <li>SCREEN - Generates signal only if breakout occurs on the latest candle</li>
+ * </ul>
  */
 @Component
 @Qualifier("eodBreakoutVolStrategy")
 public class EODBreakoutVolStrategy implements Strategy {
 
-    private static final String CODE = "EMA_BREAKOUT";
+    private static final String CODE = "EOD_BREAKOUT";
     private static final String NAME = "EOD Breakout with Volume";
 
     @Override
-    public List<TradeSignal> generateSignals(List<Candle> candles, StrategyParams params) {
+    public StrategyResult evaluate(StrategyContext context) {
         // Validate input
+        List<Candle> candles = context.getCandles();
         if (candles == null || candles.isEmpty()) {
             throw new IllegalArgumentException("Candles list cannot be null or empty");
         }
+
+        StrategyParams params = context.getParams();
+        ExecutionMode mode = context.getMode();
 
         // Get parameters with defaults
         final int lookbackDays = params.getInt("lookbackDays", 20);
@@ -70,8 +83,103 @@ public class EODBreakoutVolStrategy implements Strategy {
 
         // Need at least lookbackDays + 1 candles (history + current day)
         if (candles.size() < lookbackDays + 1) {
-            return signals; // Not enough data
+            return StrategyResult.empty(false); // Not enough data
         }
+
+        // SCREEN mode: Only evaluate the latest candle
+        if (mode == ExecutionMode.SCREEN) {
+            return evaluateScreeningMode(candles, lookbackDays, volumeMultiplier);
+        }
+
+        // BACKTEST mode: Evaluate all candles
+        return evaluateBacktestMode(candles, lookbackDays, volumeMultiplier);
+    }
+
+    /**
+     * Screening mode evaluation - only checks the latest candle for breakout.
+     *
+     * @param candles           List of candles (latest at the end)
+     * @param lookbackDays      Lookback period for high/low calculation
+     * @param volumeMultiplier  Volume threshold multiplier
+     * @return StrategyResult with actionable status if breakout detected
+     */
+    private StrategyResult evaluateScreeningMode(List<Candle> candles, int lookbackDays, double volumeMultiplier) {
+        int latestIndex = candles.size() - 1;
+        Candle today = candles.get(latestIndex);
+
+        // Skip if latest candle has invalid data
+        if (!isValidCandle(today)) {
+            return StrategyResult.empty(false);
+        }
+
+        // Get historical window (excluding latest candle)
+        List<Candle> history = candles.subList(latestIndex - lookbackDays, latestIndex);
+
+        // Calculate indicators
+        OptionalDouble highestHigh = history.stream()
+            .filter(this::isValidCandle)
+            .mapToDouble(c -> c.getHigh().doubleValue())
+            .max();
+
+        OptionalDouble lowestLow = history.stream()
+            .filter(this::isValidCandle)
+            .mapToDouble(c -> c.getLow().doubleValue())
+            .min();
+
+        OptionalDouble avgVolume = history.stream()
+            .filter(this::isValidCandle)
+            .mapToLong(Candle::getVolume)
+            .average();
+
+        // Skip if we couldn't calculate indicators
+        if (!highestHigh.isPresent() || !lowestLow.isPresent() || !avgVolume.isPresent()) {
+            return StrategyResult.empty(false);
+        }
+
+        double currentClose = today.getClose().doubleValue();
+        long currentVolume = today.getVolume();
+        double requiredVolume = avgVolume.getAsDouble() * volumeMultiplier;
+
+        // Check entry conditions
+        boolean isBreakout = currentClose > highestHigh.getAsDouble();
+        boolean hasVolumeConfirmation = currentVolume > requiredVolume;
+
+        if (isBreakout && hasVolumeConfirmation) {
+            // Calculate stop loss and target
+            BigDecimal stopLoss = BigDecimal.valueOf(lowestLow.getAsDouble());
+            BigDecimal entryPrice = today.getClose();
+            BigDecimal risk = entryPrice.subtract(stopLoss);
+            BigDecimal targetPrice = entryPrice.add(risk.multiply(BigDecimal.valueOf(2.0)));
+
+            // Create signal for next trading day
+            TradeSignal signal = TradeSignal.fromCandle(
+                today,
+                Side.BUY,
+                entryPrice,
+                stopLoss,
+                targetPrice,
+                1  // Default quantity
+            );
+
+            List<TradeSignal> signals = List.of(signal);
+            // Mark as actionable since this is a screening result for next trading day
+            return StrategyResult.actionable(signals);
+        }
+
+        // No breakout detected
+        return StrategyResult.empty(false);
+    }
+
+    /**
+     * Backtest mode evaluation - processes all historical candles.
+     *
+     * @param candles           List of candles (sorted ascending)
+     * @param lookbackDays      Lookback period for high/low calculation
+     * @param volumeMultiplier  Volume threshold multiplier
+     * @return StrategyResult with all historical signals (non-actionable)
+     */
+    private StrategyResult evaluateBacktestMode(List<Candle> candles, int lookbackDays, double volumeMultiplier) {
+        List<TradeSignal> signals = new ArrayList<>();
 
         // Start from index lookbackDays to have sufficient history
         for (int i = lookbackDays; i < candles.size(); i++) {
@@ -135,7 +243,8 @@ public class EODBreakoutVolStrategy implements Strategy {
             }
         }
 
-        return signals;
+        // Backtest signals are not actionable (historical)
+        return StrategyResult.nonActionable(signals);
     }
 
     /**

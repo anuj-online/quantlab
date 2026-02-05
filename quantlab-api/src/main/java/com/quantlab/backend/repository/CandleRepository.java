@@ -1,6 +1,7 @@
 package com.quantlab.backend.repository;
 
 import com.quantlab.backend.entity.Candle;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -70,4 +71,31 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
      * @param endDate      the end date (inclusive)
      */
     void deleteByInstrumentIdAndTradeDateBetween(Long instrumentId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * Find the last N candles for an instrument, ordered by trade date ascending.
+     * <p>
+     * This method is optimized for screening mode where only recent candles are needed
+     * for indicator calculation. Returns candles in chronological order (oldest first).
+     *
+     * @param instrumentId the instrument ID
+     * @param limit        maximum number of candles to return
+     * @return list of the most recent candles ordered by trade date ascending
+     */
+    @Query("SELECT c FROM Candle c WHERE c.instrument.id = :instrumentId ORDER BY c.tradeDate DESC")
+    List<Candle> findLatestCandles(@Param("instrumentId") Long instrumentId, Pageable pageable);
+
+    /**
+     * Find candles for a specific instrument up to a given date, limited to N most recent.
+     * <p>
+     * This is useful for screening mode where we want candles up to a specific date
+     * (run date) but only need the last N candles for indicator calculation.
+     *
+     * @param instrumentId the instrument ID
+     * @param maxDate      the maximum trade date (inclusive)
+     * @param limit        maximum number of candles to return
+     * @return list of candles up to maxDate, ordered by trade date ascending
+     */
+    @Query("SELECT c FROM Candle c WHERE c.instrument.id = :instrumentId AND c.tradeDate <= :maxDate ORDER BY c.tradeDate DESC")
+    List<Candle> findCandlesUpToDate(@Param("instrumentId") Long instrumentId, @Param("maxDate") LocalDate maxDate, Pageable pageable);
 }

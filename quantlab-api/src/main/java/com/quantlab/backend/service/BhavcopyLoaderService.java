@@ -118,12 +118,15 @@ public class BhavcopyLoaderService {
      * Parse a single CSV line into a BhavcopyRow object.
      * Handles the comma-separated format with proper type conversions.
      *
+     * New CSV Format (13 columns):
+     * SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,TOTALTRADES,ISIN
+     *
      * @param line CSV line
      * @return BhavcopyRow or null if parsing fails
      */
     private BhavcopyRow parseCsvLine(String line) {
         String[] fields = line.split(",");
-        if (fields.length < 15) {
+        if (fields.length < 13) {
             log.warn("Skipping malformed line with {} fields", fields.length);
             return null;
         }
@@ -137,65 +140,63 @@ public class BhavcopyLoaderService {
             // SERIES (field 1)
             row.setSeries(fields[1].trim());
 
-            // DATE1 (field 2) - Parse "dd-MMM-yyyy" format
-            row.setDate(parseDate(fields[2].trim()));
+            // OPEN (field 2) - formerly OPEN_PRICE
+            row.setOpenPrice(parseDecimal(fields[2].trim()));
 
-            // PREV_CLOSE (field 3)
-            row.setPrevClose(parseDecimal(fields[3].trim()));
+            // HIGH (field 3) - formerly HIGH_PRICE
+            row.setHighPrice(parseDecimal(fields[3].trim()));
 
-            // OPEN_PRICE (field 4)
-            row.setOpenPrice(parseDecimal(fields[4].trim()));
+            // LOW (field 4) - formerly LOW_PRICE
+            row.setLowPrice(parseDecimal(fields[4].trim()));
 
-            // HIGH_PRICE (field 5)
-            row.setHighPrice(parseDecimal(fields[5].trim()));
+            // CLOSE (field 5) - formerly CLOSE_PRICE
+            row.setClosePrice(parseDecimal(fields[5].trim()));
 
-            // LOW_PRICE (field 6)
-            row.setLowPrice(parseDecimal(fields[6].trim()));
+            // LAST (field 6) - formerly LAST_PRICE
+            row.setLastPrice(parseDecimal(fields[6].trim()));
 
-            // LAST_PRICE (field 7) - Ignored per spec
-            row.setLastPrice(parseDecimal(fields[7].trim()));
+            // PREVCLOSE (field 7) - formerly PREV_CLOSE
+            row.setPrevClose(parseDecimal(fields[7].trim()));
 
-            // CLOSE_PRICE (field 8)
-            row.setClosePrice(parseDecimal(fields[8].trim()));
+            // TOTTRDQTY (field 8) - formerly TTL_TRD_QNTY
+            row.setTotalTradedQuantity(parseLong(fields[8].trim()));
 
-            // AVG_PRICE (field 9) - Ignored per spec
-            row.setAvgPrice(parseDecimal(fields[9].trim()));
+            // TOTTRDVAL (field 9) - formerly TURNOVER_LACS
+            row.setTurnoverLacs(parseDecimal(fields[9].trim()));
 
-            // TTL_TRD_QNTY (field 10) - Volume
-            row.setTotalTradedQuantity(parseLong(fields[10].trim()));
+            // TIMESTAMP (field 10) - formerly DATE1
+            row.setDate(parseDate(fields[10].trim()));
 
-            // TURNOVER_LACS (field 11) - Ignored per spec
-            row.setTurnoverLacs(parseDecimal(fields[11].trim()));
+            // TOTALTRADES (field 11) - formerly NO_OF_TRADES
+            row.setNumberOfTrades(parseLong(fields[11].trim()));
 
-            // NO_OF_TRADES (field 12) - Ignored per spec
-            row.setNumberOfTrades(parseLong(fields[12].trim()));
+            // ISIN (field 12) - Not stored in BhavcopyRow (ignored)
 
-            // DELIV_QTY (field 13) - Ignored per spec
-            row.setDeliverableQuantity(parseLong(fields[13].trim()));
-
-            // DELIV_PER (field 14) - Ignored per spec
-            row.setDeliverablePercentage(parseDecimal(fields[14].trim()));
+            // Fields removed in new format (not parsed):
+            // - AVG_PRICE (field 9 in old format)
+            // - DELIV_QTY (field 13 in old format)
+            // - DELIV_PER (field 14 in old format)
 
             // Validate essential fields required for candle creation
             // These fields MUST NOT be null as they are used for candle insertion
             if (row.getOpenPrice() == null) {
-                log.error("Missing essential field OPEN_PRICE for symbol: {}", row.getSymbol());
+                log.error("Missing essential field OPEN for symbol: {}", row.getSymbol());
                 return null;
             }
             if (row.getHighPrice() == null) {
-                log.error("Missing essential field HIGH_PRICE for symbol: {}", row.getSymbol());
+                log.error("Missing essential field HIGH for symbol: {}", row.getSymbol());
                 return null;
             }
             if (row.getLowPrice() == null) {
-                log.error("Missing essential field LOW_PRICE for symbol: {}", row.getSymbol());
+                log.error("Missing essential field LOW for symbol: {}", row.getSymbol());
                 return null;
             }
             if (row.getClosePrice() == null) {
-                log.error("Missing essential field CLOSE_PRICE for symbol: {}", row.getSymbol());
+                log.error("Missing essential field CLOSE for symbol: {}", row.getSymbol());
                 return null;
             }
             if (row.getTotalTradedQuantity() == null) {
-                log.error("Missing essential field TTL_TRD_QNTY for symbol: {}", row.getSymbol());
+                log.error("Missing essential field TOTTRDQTY for symbol: {}", row.getSymbol());
                 return null;
             }
 

@@ -36,6 +36,14 @@ public interface StrategyRepository extends JpaRepository<Strategy, Long> {
     Optional<Strategy> findByCode(String code);
 
     /**
+     * Check if a strategy exists by its code.
+     *
+     * @param code the strategy code
+     * @return true if strategy exists
+     */
+    boolean existsByCode(String code);
+
+    /**
      * Find all active strategies.
      *
      * @return list of active strategies

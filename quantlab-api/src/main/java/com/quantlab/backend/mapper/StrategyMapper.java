@@ -25,7 +25,10 @@ public final class StrategyMapper {
         return new StrategyResponse(
                 strategy.getId(),
                 strategy.getCode(),
-                strategy.getName()
+                strategy.getName(),
+                strategy.getDescription(),
+                strategy.getSupportsScreening() != null ? strategy.getSupportsScreening() : true,
+                strategy.getMinLookbackDays() != null ? strategy.getMinLookbackDays() : 20
         );
     }
 }

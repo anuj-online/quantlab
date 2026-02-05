@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Spring Data JPA repository for StrategyRun entity.
@@ -60,6 +61,28 @@ public interface StrategyRunRepository extends JpaRepository<StrategyRun, Long> 
      */
     @Query("SELECT sr FROM StrategyRun sr WHERE sr.strategy.id = :strategyId AND sr.market = :market ORDER BY sr.runTimestamp DESC LIMIT 1")
     StrategyRun findLatestRun(@Param("strategyId") Long strategyId, @Param("market") MarketType market);
+
+    /**
+     * Find strategy runs by strategy code, market, and date range.
+     * Used for finding existing runs for strategy comparison.
+     *
+     * @param strategyCode the strategy code
+     * @param market the market type
+     * @param startDate the start date
+     * @param endDate the end date
+     * @return the strategy run if found
+     */
+    @Query("SELECT sr FROM StrategyRun sr " +
+           "WHERE sr.strategy.code = :strategyCode " +
+           "AND sr.market = :market " +
+           "AND sr.startDate = :startDate " +
+           "AND sr.endDate = :endDate")
+    Optional<StrategyRun> findByStrategy_CodeAndMarketAndStartDateAndEndDate(
+            @Param("strategyCode") String strategyCode,
+            @Param("market") MarketType market,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
 
     /**
      * Delete all strategy runs for a specific strategy.

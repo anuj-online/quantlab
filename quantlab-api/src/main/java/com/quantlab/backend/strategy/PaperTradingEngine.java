@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
  *   <li><b>EMA_BREAKOUT</b>: Exit if close <= stopLoss OR close >= targetPrice</li>
  *   <li><b>SMA_CROSSOVER</b>: Exit on opposite signal (fast SMA < slow SMA for longs)</li>
  *   <li><b>GAP_UP_MOMENTUM</b>: Exit after 3 holding days OR if close <= stopLoss</li>
+ *   <li><b>REL_STRENGTH_30D</b>: Exit if close <= stopLoss OR close >= targetPrice</li>
  * </ul>
  *
  * <p>Position Management:
@@ -213,6 +214,7 @@ public class PaperTradingEngine {
             case "EMA_BREAKOUT" -> findExitForEmaBreakout(signal, futureCandles);
             case "SMA_CROSSOVER" -> findExitForSmaCrossover(signal, futureCandles);
             case "GAP_UP_MOMENTUM" -> findExitForGapUpMomentum(signal, futureCandles);
+            case "REL_STRENGTH_30D" -> findExitForEmaBreakout(signal, futureCandles);
             default -> {
                 logger.warn("Unknown strategy type: {}, using default stop loss exit", strategyCode);
                 yield findExitByStopLoss(signal, futureCandles);

@@ -1,0 +1,1302 @@
+# Database Indexing and Caching Requirements
+
+**Version:** 1.0
+**Last Updated:** 2026-02-05
+**Status:** Implementation Ready
+
+---
+
+## Overview
+
+This document defines the database indexing and in-memory caching strategy for QuantLab to optimize performance for:
+1. Historical data loading (Bhavcopy imports)
+2. Strategy backtesting execution
+3. Real-time screening
+4. Future live market data integration
+
+**Current Performance Bottlenecks:**
+- Strategy execution: 5-10 seconds for 1,000 instruments over 5 years
+- Screening: 15-30 seconds for 3 strategies across 1,000 instruments
+- Data loading: 5-10 seconds for 2,000 CSV rows
+
+**Target Performance:**
+- Strategy execution: < 2 seconds (80% improvement)
+- Screening: < 3 seconds (90% improvement)
+- Data loading: < 2 seconds (80% improvement)
+
+---
+
+## Table of Contents
+
+1. [Current State Analysis](#current-state-analysis)
+2. [Database Indexing Requirements](#database-indexing-requirements)
+3. [In-Memory Caching Strategy](#in-memory-caching-strategy)
+4. [Code Optimizations](#code-optimizations)
+5. [Parallel Processing Strategy](#parallel-processing-strategy)
+6. [Live Data Considerations](#live-data-considerations)
+7. [Implementation Plan](#implementation-plan)
+
+---
+
+## 1. Current State Analysis
+
+### 1.1 Existing Indexes (From V1, V2 Migrations)
+
+| Table | Index | Columns | Status |
+|-------|-------|---------|--------|
+| `candle` | `idx_candle_instrument_date` | `(instrument_id, trade_date)` | ✅ Optimal |
+| `candle` | `idx_candle_instrument` | `(instrument_id)` | ✅ Good |
+| `instrument` | `uk_instrument_symbol_market` | `(symbol, market)` | ✅ Unique |
+| `trade_signal` | `idx_trade_signal_strategy_run` | `(strategy_run_id)` | ✅ Optimal |
+| `paper_trade` | `idx_paper_trade_strategy_run` | `(strategy_run_id)` | ✅ Optimal |
+| `screening_results` | `idx_screening_results_run_date` | `(run_date)` | ✅ Optimal |
+| All foreign keys | Implicit indexes | `(id)` references | ✅ Present |
+
+### 1.2 Query Pattern Analysis
+
+| Query Pattern | Frequency | Data Volume | Current Performance |
+|---------------|-----------|-------------|---------------------|
+| `SELECT * FROM candle WHERE instrument_id = ? AND trade_date BETWEEN ? AND ?` | VERY HIGH | Large (2.5M+ rows) | ⚠️ Bottleneck |
+| `SELECT * FROM instrument WHERE market = ? AND active = true` | MEDIUM | Small (<10K rows) | ✅ Good |
+| `SELECT * FROM candle WHERE instrument_id = ? ORDER BY trade_date DESC LIMIT N` | HIGH | Large | ⚠️ Bottleneck |
+| Strategy lookups | MEDIUM | Tiny (<100 rows) | ✅ Good |
+| Analytics aggregations | LOW | Medium | ✅ Good |
+
+### 1.3 Critical Issues
+
+**Issue #1: Duplicate Candle Loading**
+- **Location:** `StrategyRunService.java:151, 194`
+- **Problem:** Loads candles twice (once for signals, once for paper trading)
+- **Impact:** 2× database load on every strategy run
+
+**Issue #2: No Caching for Recent Candles**
+- **Location:** `ScreeningService.java:226-228`
+- **Problem:** Queries database for every instrument during screening
+- **Impact:** 3,000+ queries per screening run (1,000 instruments × 3 strategies)
+
+**Issue #3: Non-Batched Inserts**
+- **Location:** `BhavcopyLoaderService.java:104`
+- **Problem:** Individual inserts in loop
+- **Impact:** Slow data loading
+
+---
+
+## 2. Database Indexing Requirements
+
+### 2.1 New Indexes to Add
+
+#### V5__add_performance_indexes.sql
+
+```sql
+-- =====================================================
+-- Performance Optimization Indexes
+-- =====================================================
+
+-- 1. Composite index for instrument market+active queries
+-- Optimizes: SELECT * FROM instrument WHERE market = ? AND active = true
+CREATE INDEX IF NOT EXISTS idx_instrument_market_active
+ON instrument(market, active WHERE active = true);
+
+-- 2. Partial index for recent candles (screening optimization)
+-- Optimizes: Screening queries for last 90 days
+-- Smaller index size, faster maintenance
+CREATE INDEX IF NOT EXISTS idx_candle_recent
+ON candle(instrument_id, trade_date DESC)
+WHERE trade_date >= CURRENT_DATE - INTERVAL '90 days';
+
+-- 3. Covering index for analytics queries
+-- Enables index-only scans for P&L aggregations
+CREATE INDEX IF NOT EXISTS idx_paper_trade_analytics
+ON paper_trade(strategy_run_id, pnl, pnl_pct);
+
+-- 4. Index for latest price lookups (live data preparation)
+-- Optimizes: SELECT * FROM candle WHERE instrument_id = ? ORDER BY trade_date DESC LIMIT 1
+CREATE INDEX IF NOT EXISTS idx_candle_latest
+ON candle(instrument_id, trade_date DESC);
+
+-- 5. Screening date queries optimization
+CREATE INDEX IF NOT EXISTS idx_screening_results_date_symbol
+ON screening_results(run_date, symbol, strategy_code);
+```
+
+### 2.2 Table Partitioning (Future - When Candle Table > 5M Rows)
+
+#### Partitioning Strategy for `candle` Table
+
+```sql
+-- Convert to partitioned table (requires data migration)
+-- Partition by year for better query performance and easier maintenance
+
+-- Step 1: Create partitioned table (future implementation)
+CREATE TABLE candle_partitioned (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    instrument_id BIGINT NOT NULL,
+    trade_date DATE NOT NULL,
+    open NUMERIC(15,4),
+    high NUMERIC(15,4),
+    low NUMERIC(15,4),
+    close NUMERIC(15,4),
+    volume BIGINT,
+    CONSTRAINT fk_candle_instrument FOREIGN KEY (instrument_id) REFERENCES instrument(id),
+    CONSTRAINT uk_candle_instrument_date UNIQUE (instrument_id, trade_date)
+) PARTITION BY RANGE (trade_date);
+
+-- Step 2: Create yearly partitions
+CREATE TABLE candle_2020 PARTITION OF candle_partitioned
+    FOR VALUES FROM ('2020-01-01') TO ('2021-01-01');
+
+CREATE TABLE candle_2021 PARTITION OF candle_partitioned
+    FOR VALUES FROM ('2021-01-01') TO ('2022-01-01');
+
+CREATE TABLE candle_2022 PARTITION OF candle_partitioned
+    FOR VALUES FROM ('2022-01-01') TO ('2023-01-01');
+
+CREATE TABLE candle_2023 PARTITION OF candle_partitioned
+    FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');
+
+CREATE TABLE candle_2024 PARTITION OF candle_partitioned
+    FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+
+-- Step 3: Create indexes on partitioned table
+CREATE INDEX idx_candle_partitioned_instrument_date
+ON candle_partitioned(instrument_id, trade_date);
+
+-- Step 4: Migrate existing data (INSERT INTO candle_partitioned SELECT * FROM candle)
+```
+
+**When to Implement:** When candle table exceeds 5 million rows
+
+**Benefits:**
+- 50-70% faster date range queries (query pruning)
+- Faster data archival (drop old partitions)
+- Parallel query execution
+
+---
+
+## 3. In-Memory Caching Strategy
+
+### 3.1 Cache Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Application Layer                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────┐│
+│  │  In-Memory Cache │  │  Redis Cache     │  │  Database       ││
+│  │  (Reference Data)│  │  (Hot Data)      │  │  (Cold Data)    ││
+│  ├──────────────────┤  ├──────────────────┤  ├─────────────────┤│
+│  │ • Strategies     │  │ • Recent Candles │  │ • All Candles   ││
+│  │ • Instruments    │  │ • Screening      │  │ • History       ││
+│  │ • (App Lifetime) │  │ • (TTL-based)    │  │                 ││
+│  └──────────────────┘  └──────────────────┘  └─────────────────┘│
+│           │                     │                     │          │
+│           └─────────────────────┴─────────────────────┘          │
+│                            Cache Lookup                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Cache Definitions
+
+#### Cache 1: Reference Data (In-Memory)
+
+**Purpose:** Static data that rarely changes
+**Storage:** Spring `@Cacheable` with Caffeine (in-memory)
+**TTL:** Application lifetime (refresh on manual update)
+
+| Cache Name | Key Pattern | Value | TTL | Invalidate On |
+|------------|-------------|-------|-----|---------------|
+| `strategies` | `all` | `List<Strategy>` | App lifetime | Strategy CRUD |
+| `instruments` | `{market}` | `List<Instrument>` | App lifetime | Instrument CRUD |
+
+**Implementation:**
+```java
+@Cacheable(value = "strategies", key = "'all'")
+public List<Strategy> getAllStrategies() {
+    return strategyRepository.findAll();
+}
+
+@Cacheable(value = "instruments", key = "#market")
+public List<Instrument> getActiveInstruments(String market) {
+    return instrumentRepository.findByMarketAndActive(market, true);
+}
+```
+
+#### Cache 2: Recent Candles (Redis)
+
+**Purpose:** Hot candle data for screening and recent analysis
+**Storage:** Redis
+**TTL:** 24 hours (refreshed after daily Bhavcopy load)
+
+| Cache Name | Key Pattern | Value | TTL | Estimated Size |
+|------------|-------------|-------|-----|----------------|
+| `candles:recent` | `candles:recent:{instrumentId}` | `List<Candle>` (last 90 days) | 24h | ~2KB × 2,000 = 4MB |
+
+**Implementation:**
+```java
+@Cacheable(value = "candles:recent", key = "#instrumentId",
+           cacheResolver = "redisCacheResolver")
+public List<Candle> getRecentCandles(Long instrumentId, int days) {
+    LocalDate startDate = LocalDate.now().minusDays(days);
+    return candleRepository.findByInstrumentIdAndTradeDateGreaterThanEqual(
+        instrumentId, startDate
+    );
+}
+```
+
+#### Cache 3: Strategy Run Candles (Redis)
+
+**Purpose:** Candle data for specific strategy runs (avoid duplicate queries)
+**Storage:** Redis
+**TTL:** 1 hour (short-lived, per-run cache)
+
+| Cache Name | Key Pattern | Value | TTL | Estimated Size |
+|------------|-------------|-------|-----|----------------|
+| `candles:run` | `candles:run:{instrumentId}:{startDate}:{endDate}` | `List<Candle>` | 1h | ~50KB per run |
+
+**Implementation:**
+```java
+@Cacheable(value = "candles:run",
+           key = "#instrumentId + ':' + #startDate + ':' + #endDate",
+           cacheResolver = "redisCacheResolver")
+public List<Candle> getCandlesForRun(Long instrumentId,
+                                      LocalDate startDate,
+                                      LocalDate endDate) {
+    return candleRepository.findByInstrumentIdAndTradeDateBetween(
+        instrumentId, startDate, endDate
+    );
+}
+```
+
+#### Cache 4: Screening Results (Redis)
+
+**Purpose:** Cache screening results to avoid re-computation
+**Storage:** Redis
+**TTL:** 24 hours
+
+| Cache Name | Key Pattern | Value | TTL | Estimated Size |
+|------------|-------------|-------|-----|----------------|
+| `screening:results` | `screening:results:{date}:{hash(strategyCodes)}` | `ScreeningResponse` | 24h | ~100KB per screening |
+
+**Implementation:**
+```java
+@Cacheable(value = "screening:results",
+           key = "#date + ':' + #strategyCodes.hashCode()",
+           cacheResolver = "redisCacheResolver")
+public ScreeningResponse runScreening(LocalDate date, List<String> strategyCodes) {
+    // ... screening logic
+}
+```
+
+### 3.3 Cache Configuration (Spring Boot)
+
+#### application.yml
+
+```yaml
+spring:
+  # Redis Configuration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+
+  # Cache Configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: 86400000  # 24 hours default
+      cache-null-values: false
+      use-key-prefix: true
+
+  # JPA Batch Insert Optimization
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+          order_inserts: true
+          order_updates: true
+
+  # JDBC URL with PostgreSQL optimizations
+  datasource:
+    url: jdbc:postgresql://localhost:5432/quantlab?rewriteBatchedInserts=true
+```
+
+#### pom.xml Dependencies
+
+```xml
+<!-- Redis for Caching -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+
+<!-- Caffeine for In-Memory Caching -->
+<dependency>
+    <groupId>com.github.ben-manes.caffeine</groupId>
+    <artifactId>caffeine</artifactId>
+</dependency>
+
+<!-- Spring Cache -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-cache</artifactId>
+</dependency>
+```
+
+### 3.4 Cache Invalidation Strategy
+
+| Event | Caches to Invalidate | Method |
+|-------|---------------------|--------|
+| Bhavcopy data load | `candles:recent` | `@CacheEvict(value = "candles:recent", allEntries = true)` |
+| Strategy CRUD | `strategies` | `@CacheEvict(value = "strategies", allEntries = true)` |
+| Instrument CRUD | `instruments` | `@CacheEvict(value = "instruments", key = "#market")` |
+| Manual re-screen | `screening:results` | `@CacheEvict(value = "screening:results", key = "...")` |
+
+### 3.5 Estimated Cache Memory Requirements
+
+| Cache Type | Entries | Size per Entry | Total Memory |
+|------------|----------|----------------|--------------|
+| Strategies | 1 | ~10KB | 10KB |
+| Instruments (2 markets) | 2 | ~500KB | 1MB |
+| Recent Candles | 2,000 instruments | ~2KB | 4MB |
+| Strategy Run Candles | 100 concurrent runs | ~50KB | 5MB |
+| Screening Results | 30 days × 10 combinations | ~100KB | 3MB |
+| **Total** | | | **~13MB** |
+
+**Recommendation:** Minimum 64MB Redis allocation, 128MB for headroom
+
+---
+
+## 4. Code Optimizations
+
+### 4.1 Fix Duplicate Candle Loading (CRITICAL)
+
+**File:** `StrategyRunService.java`
+
+**Current Flow:**
+```
+1. loadCandlesForRun() → loads candles for signals
+2. executeStrategy() → generates signals
+3. loadCandlesForRun() → loads candles AGAIN for paper trading ❌
+4. runPaperTrading() → executes trades
+```
+
+**Optimized Flow:**
+```
+1. loadCandlesForRun() → loads candles once
+2. executeStrategy(candles) → generates signals
+3. runPaperTrading(candles) → reuses loaded candles ✅
+4. save results
+```
+
+**Changes Required:**
+
+```java
+// StrategyRunService.java - BEFORE
+public StrategyRunResult executeStrategyRun(...) {
+    List<Instrument> instruments = getActiveInstruments(market);
+
+    for (Instrument instrument : instruments) {
+        // Load candles for signals
+        List<Candle> candles = loadCandles(instrument, startDate, endDate);
+        List<TradeSignal> signals = strategy.execute(candles);
+
+        // Load candles AGAIN for paper trading ❌
+        List<Candle> paperCandles = loadCandles(instrument, startDate, endDate);
+        List<PaperTrade> trades = paperEngine.runPaperTrading(signals, paperCandles);
+        // ...
+    }
+}
+
+// StrategyRunService.java - AFTER
+public StrategyRunResult executeStrategyRun(...) {
+    List<Instrument> instruments = getActiveInstruments(market);
+
+    for (Instrument instrument : instruments) {
+        // Load candles ONCE ✅
+        List<Candle> candles = loadCandles(instrument, startDate, endDate);
+        List<TradeSignal> signals = strategy.execute(candles);
+
+        // Reuse candles for paper trading ✅
+        List<PaperTrade> trades = paperEngine.runPaperTrading(signals, candles);
+        // ...
+    }
+}
+```
+
+**Impact:** 50% reduction in database queries
+
+### 4.2 Implement Batch Insert for Bhavcopy Loading
+
+**File:** `BhavcopyLoaderService.java`
+
+**Current Code:**
+```java
+for (BhavcopyRow row : rows) {
+    Candle candle = new Candle(...);
+    candleRepository.save(candle);  // Individual insert ❌
+}
+```
+
+**Optimized Code:**
+```java
+List<Candle> candlesToSave = new ArrayList<>();
+for (BhavcopyRow row : rows) {
+    if (!candleExists(row)) {
+        candlesToSave.add(new Candle(row));
+    }
+}
+candleRepository.saveAll(candlesToSave);  // Batch insert ✅
+```
+
+**Configuration Required:**
+```yaml
+spring:
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+```
+
+**Impact:** 80% faster data loading
+
+### 4.3 Optimize Screening with Recent Candles Cache
+
+**File:** `ScreeningService.java`
+
+**Current Code:**
+```java
+public ScreeningResult runScreening(...) {
+    for (Instrument instrument : instruments) {
+        // Always queries database ❌
+        List<Candle> candles = candleRepository.findByInstrumentIdAndTradeDateBetween(
+            instrument.getId(), startDate, endDate
+        );
+        // ...
+    }
+}
+```
+
+**Optimized Code:**
+```java
+@Cacheable(value = "candles:recent", key = "#instrumentId",
+           unless = "#result == null or #result.isEmpty()")
+public List<Candle> getRecentCandles(Long instrumentId, int lookbackDays) {
+    LocalDate startDate = LocalDate.now().minusDays(lookbackDays);
+    return candleRepository.findLatestCandles(instrumentId, startDate);
+}
+
+public ScreeningResult runScreening(...) {
+    for (Instrument instrument : instruments) {
+        // Uses cache if available ✅
+        List<Candle> candles = getRecentCandles(instrument.getId(), maxLookbackDays);
+        // ...
+    }
+}
+```
+
+**Impact:** 90% reduction in screening database queries
+
+---
+
+## 5. Parallel Processing Strategy
+
+### 5.1 Overview
+
+QuantLab's strategy execution and screening processes are **embarrassingly parallel** - each instrument can be processed independently. This section identifies safe opportunities for parallelization that can significantly improve performance without introducing data consistency issues.
+
+**Key Principle:** Operations are safe to parallelize when they:
+1. Operate on independent data (no shared mutable state)
+2. Don't modify the same database rows
+3. Have no ordering dependencies
+
+### 5.2 Parallelization Opportunities
+
+#### Opportunity 1: Strategy Execution (Backtesting)
+
+**Location:** `StrategyRunService.java` - `executeStrategyRun()`
+
+**Current Flow:** Sequential processing of instruments
+```java
+for (Instrument instrument : instruments) {  // Sequential ❌
+    List<Candle> candles = loadCandles(instrument, startDate, endDate);
+    List<TradeSignal> signals = strategy.execute(candles);
+    List<PaperTrade> trades = paperEngine.runPaperTrading(signals, candles);
+    // Save results...
+}
+```
+
+**Parallel Flow:** Process instruments concurrently
+```java
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
+
+List<CompletableFuture<InstrumentResult>> futures = instruments.stream()
+    .map(instrument -> CompletableFuture.supplyAsync(() -> {
+        List<Candle> candles = loadCandles(instrument, startDate, endDate);
+        List<TradeSignal> signals = strategy.execute(candles);
+        List<PaperTrade> trades = paperEngine.runPaperTrading(signals, candles);
+        return new InstrumentResult(instrument, signals, trades);
+    }, executorService))
+    .toList();
+
+// Wait for all to complete and collect results
+List<InstrumentResult> results = futures.stream()
+    .map(CompletableFuture::join)
+    .collect(Collectors.toList());
+```
+
+**Thread Safety:** ✅ **SAFE**
+- Each instrument operates on independent candle data
+- Signals and trades are isolated per instrument
+- No shared mutable state between threads
+- Database inserts are to different rows (different instrument_id)
+
+**Configuration:**
+```java
+@Configuration
+public class AsyncConfig {
+
+    @Bean(name = "strategyExecutor")
+    public Executor strategyExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(8);           // Initial threads
+        executor.setMaxPoolSize(16);            // Max threads
+        executor.setQueueCapacity(100);         // Queue size
+        executor.setThreadNamePrefix("strategy-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
+}
+```
+
+**Performance Gain:**
+- **Sequential:** 1000 instruments × 10ms = 10 seconds
+- **Parallel (8 cores):** 1000 instruments ÷ 8 = ~1.25 seconds
+- **Improvement:** ~8x faster (limited by CPU cores)
+
+**Implementation Notes:**
+- Use virtual threads (Java 21+) for even better scalability: `Executors.newVirtualThreadPerTaskExecutor()`
+- Set `spring.jpa.properties.hibernate.jdbc.batch_size` for batched inserts from parallel threads
+- Monitor database connection pool to avoid exhaustion
+
+---
+
+#### Opportunity 2: Screening Execution
+
+**Location:** `ScreeningService.java` - `runScreening()`
+
+**Current Flow:** Sequential processing
+```java
+for (Instrument instrument : instruments) {  // Sequential ❌
+    for (Strategy strategy : strategies) {
+        List<Candle> candles = getCandles(instrument);
+        ScreeningSignal signal = strategy.evaluate(candles);
+        results.add(signal);
+    }
+}
+```
+
+**Parallel Flow:** Process instruments in parallel
+```java
+import java.util.stream.IntStream;
+
+// Split instruments into batches for controlled parallelism
+int batchSize = 50;
+List<List<Instrument>> batches = partition(instruments, batchSize);
+
+List<ScreeningSignal> allSignals = batches.parallelStream()  // Parallel ✅
+    .flatMap(batch -> processBatch(batch, strategies, date).stream())
+    .collect(Collectors.toList());
+
+private List<ScreeningSignal> processBatch(List<Instrument> batch,
+                                           List<Strategy> strategies,
+                                           LocalDate date) {
+    List<ScreeningSignal> signals = new ArrayList<>();
+    for (Instrument instrument : batch) {
+        for (Strategy strategy : strategies) {
+            List<Candle> candles = getRecentCandles(instrument.getId(), maxLookbackDays);
+            signals.addAll(strategy.screen(candles, date));
+        }
+    }
+    return signals;
+}
+```
+
+**Thread Safety:** ✅ **SAFE**
+- Each instrument-screening combination is independent
+- No cross-dependencies between strategies
+- Results are accumulated in thread-safe manner
+
+**Alternative: ExecutorService with Controlled Concurrency**
+```java
+@Autowired
+@Qualifier("screeningExecutor")
+private Executor screeningExecutor;
+
+public ScreeningResult runScreening(LocalDate date, List<String> strategyCodes) {
+    List<Instrument> instruments = getActiveInstruments(market);
+    List<Strategy> strategies = loadStrategies(strategyCodes);
+
+    // Process each instrument in parallel
+    List<CompletableFuture<List<ScreeningSignal>>> futures = instruments.stream()
+        .map(instrument -> CompletableFuture.supplyAsync(() ->
+            processInstrumentForScreening(instrument, strategies, date),
+            screeningExecutor
+        ))
+        .toList();
+
+    // Collect all signals
+    List<ScreeningSignal> allSignals = futures.stream()
+        .flatMap(future -> future.join().stream())
+        .collect(Collectors.toList());
+
+    return new ScreeningResult(date, allSignals);
+}
+```
+
+**Configuration:**
+```yaml
+spring:
+  task:
+    execution:
+      pool:
+        core-size: 10
+        max-size: 20
+        queue-capacity: 200
+        thread-name-prefix: "screening-"
+```
+
+**Performance Gain:**
+- **Sequential:** 1000 instruments × 3 strategies × 10ms = 30 seconds
+- **Parallel (10 cores):** ~3-4 seconds
+- **Improvement:** ~8-10x faster
+
+---
+
+#### Opportunity 3: Data Loading (Bhavcopy CSV Processing)
+
+**Location:** `BhavcopyLoaderService.java` - `processBhavcopyFile()`
+
+**Current Flow:** Sequential existence check and insert
+```java
+for (BhavcopyRow row : rows) {  // Sequential ❌
+    Instrument instrument = findOrCreateInstrument(row);
+    if (!candleExists(instrument, row.getDate())) {
+        Candle candle = new Candle(instrument, row);
+        candleRepository.save(candle);
+    }
+}
+```
+
+**Parallel Flow:** Partition and process in parallel
+```java
+// Phase 1: Ensure all instruments exist (parallel)
+Map<String, Instrument> instruments = rows.parallelStream()
+    .collect(Collectors.toConcurrentMap(
+        BhavcopyRow::getSymbol,
+        row -> findOrCreateInstrument(row),
+        (existing, replacement) -> existing
+    ));
+
+// Phase 2: Filter candles to insert (parallel)
+List<Candle> candlesToInsert = rows.parallelStream()
+    .filter(row -> !candleExists(instruments.get(row.getSymbol()), row.getDate()))
+    .map(row -> new Candle(instruments.get(row.getSymbol()), row))
+    .collect(Collectors.toList());
+
+// Phase 3: Batch insert (single-threaded - JPA requires this)
+candleRepository.saveAll(candlesToInsert);  // Batch insert ✅
+```
+
+**Thread Safety:** ✅ **SAFE** with caveats
+- Instrument lookup/creation: Safe (uses `findBySymbolAndMarket` with concurrent map)
+- Candle existence check: Safe (read-only queries)
+- **Insert must remain single-threaded** (JPA/Hibernate requirement)
+- Use `ConcurrentHashMap` for instrument lookup
+
+**Performance Gain:**
+- **Sequential:** 2000 rows × 5ms = 10 seconds
+- **Parallel (processing only):** ~2-3 seconds + ~1 second batch insert
+- **Improvement:** ~3-4x faster
+
+---
+
+#### Opportunity 4: Strategy Comparison
+
+**Location:** `StrategyComparisonService.java` - `compareStrategies()`
+
+**Current Flow:** Sequential strategy execution
+```java
+for (String strategyCode : strategyCodes) {  // Sequential ❌
+    StrategyMetrics metrics = calculateStrategyMetrics(strategyCode, ...);
+    results.add(metrics);
+}
+```
+
+**Parallel Flow:** Execute strategies concurrently
+```java
+List<CompletableFuture<StrategyMetrics>> futures = strategyCodes.stream()
+    .map(code -> CompletableFuture.supplyAsync(() ->
+        calculateStrategyMetrics(code, market, startDate, endDate),
+        comparisonExecutor
+    ))
+    .toList();
+
+List<StrategyMetrics> metrics = futures.stream()
+    .map(CompletableFuture::join)
+    .collect(Collectors.toList());
+```
+
+**Thread Safety:** ✅ **SAFE**
+- Each strategy runs independently
+- No shared state between strategy executions
+- Results are aggregated at the end
+
+---
+
+#### Opportunity 5: Analytics Calculations
+
+**Location:** `PaperTradeRepository.java` - Analytics methods
+
+**Current Flow:** Multiple sequential queries
+```java
+Long totalPnl = sumPnlByStrategyRun(runId);
+Long winCount = countWinningTrades(runId);
+Long lossCount = countLosingTrades(runId);
+// ... more queries
+```
+
+**Parallel Flow:** Execute analytics queries concurrently
+```java
+CompletableFuture<Long> totalPnlFuture = CompletableFuture.supplyAsync(() ->
+    paperTradeRepository.sumPnlByStrategyRun(runId), executor);
+
+CompletableFuture<Long> winCountFuture = CompletableFuture.supplyAsync(() ->
+    paperTradeRepository.countWinningTrades(runId), executor);
+
+CompletableFuture<Long> lossCountFuture = CompletableFuture.supplyAsync(() ->
+    paperTradeRepository.countLosingTrades(runId), executor);
+
+// Wait for all and combine
+CompletableFuture.allOf(totalPnlFuture, winCountFuture, lossCountFuture).join();
+
+AnalyticsSummary summary = new AnalyticsSummary(
+    totalPnlFuture.join(),
+    winCountFuture.join(),
+    lossCountFuture.join()
+    // ...
+);
+```
+
+**Thread Safety:** ✅ **SAFE**
+- All queries are read-only (SELECT)
+- Database handles concurrent reads automatically
+- Each query is independent
+
+**Performance Gain:**
+- **Sequential:** 5 queries × 50ms = 250ms
+- **Parallel:** ~50ms (slowest query)
+- **Improvement:** ~5x faster
+
+---
+
+### 5.3 Thread Safety Guidelines
+
+#### ✅ SAFE to Parallelize
+
+| Scenario | Thread Safety | Reason |
+|----------|---------------|--------|
+| Read-only queries | ✅ Safe | Database handles concurrent reads |
+- Each thread operates on different `instrument_id` | ✅ Safe | No row conflicts |
+- Strategy evaluation (pure functions) | ✅ Safe | No side effects |
+- Creating new entities | ✅ Safe | Different rows |
+- Paper trading (in-memory) | ✅ Safe | Isolated per signal |
+
+#### ⚠️ CAUTION Required
+
+| Scenario | Thread Safety | Mitigation |
+|----------|---------------|------------|
+- JPA/Hibernate `save()` in parallel | ⚠️ Caution | Use `saveAll()` or synchronized batches |
+- Updating same entity | ❌ Not Safe | Avoid or use optimistic locking |
+- Shared collections | ❌ Not Safe | Use `ConcurrentHashMap` or synchronized |
+- Database connection pool | ⚠️ Caution | Increase pool size for parallel threads |
+
+#### ❌ NOT SAFE to Parallelize
+
+| Scenario | Thread Safety | Reason |
+|----------|---------------|--------|
+- Sequential operations with dependencies | ❌ Not Safe | Ordering required |
+- Non-thread-safe libraries | ❌ Not Safe | Check library documentation |
+- Modifying shared mutable state | ❌ Not Safe | Race conditions |
+- Transactions spanning threads | ❌ Not Safe | Transaction context is thread-bound |
+
+---
+
+### 5.4 Java Parallelization Options
+
+#### Option 1: Parallel Streams (Simplest)
+
+```java
+// Best for: CPU-bound, read-only operations
+instruments.parallelStream()
+    .map(instrument -> processInstrument(instrument))
+    .collect(Collectors.toList());
+```
+
+**Pros:** Simple, no configuration needed
+**Cons:** Uses common ForkJoinPool, less control
+
+#### Option 2: CompletableFuture (Flexible)
+
+```java
+// Best for: I/O-bound operations, mixed workloads
+List<CompletableFuture<Result>> futures = items.stream()
+    .map(item -> CompletableFuture.supplyAsync(() -> process(item), executor))
+    .toList();
+
+List<Result> results = futures.stream()
+    .map(CompletableFuture::join)
+    .toList();
+```
+
+**Pros:** Custom executor, better error handling
+**Cons:** More verbose code
+
+#### Option 3: Virtual Threads (Java 21+)
+
+```java
+// Best for: I/O-bound with many concurrent operations
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    List<Future<Result>> futures = new ArrayList<>();
+    for (Instrument instrument : instruments) {
+        futures.add(executor.submit(() -> processInstrument(instrument)));
+    }
+    // Collect results...
+}
+```
+
+**Pros:** Lightweight, can handle thousands of threads
+**Cons:** Requires Java 21+
+
+#### Option 4: ExecutorService (Classic)
+
+```java
+// Best for: Fine-grained control, production systems
+ExecutorService executor = Executors.newFixedThreadPool(8);
+List<Future<Result>> futures = new ArrayList<>();
+for (Instrument instrument : instruments) {
+    futures.add(executor.submit(() -> processInstrument(instrument)));
+}
+// Collect results...
+executor.shutdown();
+```
+
+**Pros:** Full control, production-ready
+**Cons:** More boilerplate code
+
+---
+
+### 5.5 Configuration for Parallel Processing
+
+#### application.yml
+
+```yaml
+spring:
+  task:
+    execution:
+      pool:
+        core-size: 8           # Initial thread count
+        max-size: 16            # Maximum thread count
+        queue-capacity: 100     # Queue size before rejection
+        keep-alive: 60s         # Thread idle timeout
+      thread-name-prefix: "quantlab-"
+
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50       # Enable batch inserts
+          order_inserts: true
+          order_updates: true
+        connection:
+          provider_disables_autocommit: true
+
+  datasource:
+    hikari:
+      maximum-pool-size: 20    # Increase for parallel queries
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+```
+
+#### Async Configuration
+
+```java
+@Configuration
+@EnableAsync
+public class AsyncConfiguration implements AsyncConfigurer {
+
+    @Override
+    public Executor getAsyncExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(8);
+        executor.setMaxPoolSize(16);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("quantlab-async-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    @Override
+    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {
+        return (throwable, method, params) ->
+            log.error("Async error in method {}", method.getName(), throwable);
+    }
+}
+```
+
+---
+
+### 5.6 Performance Estimates with Parallelization
+
+| Operation | Sequential | Parallel (8 cores) | Improvement |
+|-----------|-----------|-------------------|-------------|
+| Strategy Run (1000 instruments) | 10 sec | ~1.5 sec | **~7x** |
+| Screening (3 strategies, 1000 instruments) | 30 sec | ~4 sec | **~7x** |
+| Data Loading (2000 rows) | 10 sec | ~3 sec | **~3x** |
+| Strategy Comparison (4 strategies) | 2 sec | ~0.5 sec | **~4x** |
+| Analytics Retrieval | 250ms | ~60ms | **~4x** |
+
+**Combined with Indexing + Caching:**
+- **Current:** Strategy run = 5-10 sec
+- **With Indexes:** 3-5 sec
+- **With Caching:** 1-2 sec
+- **With Parallelization:** **0.3-0.5 sec** (10-20x total improvement)
+
+---
+
+### 5.7 Implementation Priority
+
+| Priority | Component | Effort | Impact | Risk |
+|----------|-----------|--------|--------|------|
+| P0 | Screening parallelization | 4 hours | 7-10x | Low |
+| P0 | Strategy run parallelization | 4 hours | 7-8x | Low |
+| P1 | Data loading parallelization | 3 hours | 3-4x | Low |
+| P1 | Strategy comparison parallelization | 2 hours | 4x | Low |
+| P2 | Analytics parallelization | 2 hours | 4-5x | Low |
+| P3 | Virtual threads migration (Java 21+) | 8 hours | 2-3x | Medium |
+
+**Recommended Starting Point:** Begin with **screening parallelization** as it has the highest impact and lowest risk.
+
+---
+
+### 5.8 Monitoring Parallel Execution
+
+#### Metrics to Track
+
+```yaml
+management:
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: quantlab
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+```
+
+**Key Metrics:**
+- `executor.pool.size` - Current thread pool size
+- `executor.queue.size` - Tasks waiting in queue
+- `executor.completed.tasks` - Total completed tasks
+- `jvm.threads.live.*` - JVM thread counts
+
+#### Logging
+
+```java
+@Slf4j
+@Component
+public class ParallelExecutionMonitor {
+
+    @EventListener
+    public void handleTaskCompleted(ApplicationReadyEvent event) {
+        log.info("Thread pool config - Core: {}, Max: {}, Queue: {}",
+            threadPool.getCorePoolSize(),
+            threadPool.getMaxPoolSize(),
+            threadPool.getQueue().size()
+        );
+    }
+}
+```
+
+---
+
+## 6. Live Data Considerations
+
+### 6.1 Anticipated Live Data Patterns
+
+When integrating live market data, the following query patterns will emerge:
+
+| Pattern | Frequency | Query | Impact |
+|---------|-----------|-------|--------|
+| EOD Data Updates | HIGH (daily) | UPSERT into candle | Need upsert optimization |
+| Latest Price Lookup | VERY HIGH | `SELECT ... ORDER BY date DESC LIMIT 1` | Needs dedicated index |
+| Real-time Monitoring | VERY HIGH | Repeated latest queries | Needs materialized view |
+| Intraday Data | FUTURE | New table with minute data | Needs time-series DB |
+
+### 6.2 Live Data Readiness
+
+#### 6.2.1 Latest Price Materialized View
+
+```sql
+-- Create materialized view for latest prices (refreshed every minute during trading hours)
+CREATE MATERIALIZED VIEW latest_prices AS
+SELECT DISTINCT ON (instrument_id)
+    instrument_id,
+    trade_date,
+    close,
+    volume,
+    NOW() as last_updated
+FROM candle
+ORDER BY instrument_id, trade_date DESC;
+
+-- Index for fast lookups
+CREATE UNIQUE INDEX idx_latest_prices_instrument
+ON latest_prices(instrument_id);
+
+-- Refresh function (called by scheduler)
+CREATE OR REPLACE FUNCTION refresh_latest_prices()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY latest_prices;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### 6.2.2 Upsert Pattern for EOD Updates
+
+```java
+// Use PostgreSQL ON CONFLICT for upsert
+@Modifying
+@Query(value = """
+    INSERT INTO candle (instrument_id, trade_date, open, high, low, close, volume)
+    VALUES (:instrumentId, :tradeDate, :open, :high, :low, :close, :volume)
+    ON CONFLICT (instrument_id, trade_date)
+    DO UPDATE SET
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        volume = EXCLUDED.volume
+    """, nativeQuery = true)
+void upsertCandle(@Param("instrumentId") Long instrumentId,
+                  @Param("tradeDate") LocalDate tradeDate,
+                  @Param("open") BigDecimal open,
+                  @Param("high") BigDecimal high,
+                  @Param("low") BigDecimal low,
+                  @Param("close") BigDecimal close,
+                  @Param("volume") Long volume);
+```
+
+#### 6.2.3 Intraday Table Preparation (Future)
+
+```sql
+-- For future intraday data (not needed yet)
+CREATE TABLE candle_intraday (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    instrument_id BIGINT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    open NUMERIC(15,4),
+    high NUMERIC(15,4),
+    low NUMERIC(15,4),
+    close NUMERIC(15,4),
+    volume BIGINT,
+    CONSTRAINT fk_intraday_instrument FOREIGN KEY (instrument_id) REFERENCES instrument(id)
+) PARTITION BY RANGE (timestamp);
+
+-- Create daily partitions automatically
+CREATE INDEX idx_intraday_instrument_time
+ON candle_intraday(instrument_id, timestamp DESC);
+```
+
+### 6.3 Cache Strategy for Live Data
+
+| Data Type | Cache Strategy | TTL | Invalidate On |
+|-----------|---------------|-----|---------------|
+| Latest prices | Redis | 1 minute | Price update |
+| EOD candles | Redis | 24 hours | Daily EOD update |
+| Reference data | In-memory | App lifetime | Manual |
+
+**Important:** Keep live data cache TTL short (1-5 minutes) to ensure fresh data.
+
+---
+
+## 7. Implementation Plan
+
+### Phase 1: Quick Wins (Week 1)
+
+| Task | File | Effort | Impact |
+|------|------|--------|-------|
+| Add V5 performance indexes migration | `V5__add_performance_indexes.sql` | 1 hour | 10-20% |
+| Fix duplicate candle loading | `StrategyRunService.java` | 2 hours | 50% |
+| Enable JDBC batch inserts | `application.yml` | 30 min | 80% (data load) |
+| Add strategy/instrument caching | Config + annotations | 2 hours | 5-10% |
+
+**Total Effort:** ~5 hours
+**Expected Improvement:** 50-70% overall performance gain
+
+### Phase 2: Redis Caching (Week 2)
+
+| Task | Effort | Impact |
+|------|--------|-------|
+| Setup Redis (Docker/local) | 1 hour | - |
+| Add Redis dependencies | 30 min | - |
+| Configure cache resolvers | 2 hours | - |
+| Implement recent candles cache | 3 hours | 90% (screening) |
+| Implement screening results cache | 2 hours | 80% (repeat views) |
+| Add cache invalidation hooks | 2 hours | - |
+
+**Total Effort:** ~10 hours
+**Expected Improvement:** 80-90% improvement in screening, 50% in strategy runs
+
+### Phase 3: Advanced Optimizations (Month 1)
+
+| Task | Effort | Impact |
+|------|--------|-------|
+| Implement table partitioning | 4 hours | 30-50% (large tables) |
+| Create latest prices materialized view | 2 hours | Live data ready |
+| Add analytics covering indexes | 2 hours | 20% (analytics) |
+| Implement cache monitoring | 3 hours | Observability |
+
+**Total Effort:** ~10 hours
+**Expected Improvement:** Future-proofing for live data
+
+### Phase 4: Live Data Preparation (Quarter 1)
+
+| Task | Effort | Impact |
+|------|--------|-------|
+| Design intraday data architecture | 4 hours | - |
+| Implement upsert pattern | 2 hours | - |
+| Create live data cache layer | 4 hours | - |
+| Performance testing with live feeds | 8 hours | - |
+
+---
+
+## 8. Monitoring and Metrics
+
+### 8.1 Key Performance Indicators
+
+| Metric | Target | Current | Monitoring |
+|--------|--------|---------|------------|
+| Strategy run time (1000 instruments) | < 2 sec | 5-10 sec | Spring Actuator |
+| Screening time (3 strategies) | < 3 sec | 15-30 sec | Spring Actuator |
+| Data load time (2000 rows) | < 2 sec | 5-10 sec | Spring Actuator |
+| Cache hit rate | > 80% | N/A | Redis INFO |
+| Database CPU during peak | < 50% | N/A | pg_stat_statements |
+
+### 8.2 Query Performance Monitoring
+
+```sql
+-- Enable pg_stat_statements in postgresql.conf
+shared_preload_libraries = 'pg_stat_statements'
+
+-- Monitor slow queries
+SELECT query, calls, total_exec_time, mean_exec_time, stddev_exec_time
+FROM pg_stat_statements
+WHERE query LIKE '%candle%'
+ORDER BY mean_exec_time DESC
+LIMIT 10;
+
+-- Check cache hit ratio
+SELECT
+    schemaname,
+    tablename,
+    idx_scan AS index_scans,
+    seq_scan AS sequential_scans,
+    idx_scan::float / GREATEST(idx_scan + seq_scan, 1) AS index_ratio
+FROM pg_stat_user_tables
+ORDER BY index_ratio ASC;
+```
+
+### 8.3 Application Metrics (Spring Actuator)
+
+```yaml
+# application.yml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: quantlab
+```
+
+**Key Metrics to Track:**
+- `cache.redis.gets` - Redis GET operations
+- `cache.redis.puts` - Redis PUT operations
+- `cache.redis.hits` - Cache hits
+- `cache.redis.misses` - Cache misses
+- `jdbc.connections.active` - Active DB connections
+- `h2.com.connections.active` - H2 (if used)
+
+---
+
+## 9. Summary
+
+### Immediate Actions (This Week)
+
+1. ✅ Create V5 migration for performance indexes
+2. ✅ Fix duplicate candle loading in StrategyRunService
+3. ✅ Enable JDBC batch inserts in application.yml
+4. ✅ Add in-memory caching for strategies and instruments
+
+### Short-term (Next 2 Weeks)
+
+5. ✅ Setup Redis and implement recent candles cache
+6. ✅ Implement screening results cache
+7. ✅ Add cache monitoring via Spring Actuator
+8. ✅ **Implement screening parallelization** (7-10x faster)
+9. ✅ **Implement strategy run parallelization** (7-8x faster)
+
+### Medium-term (Next Month)
+
+10. ✅ Implement table partitioning for candles
+11. ✅ Create latest prices materialized view
+12. ✅ Add analytics covering indexes
+13. ✅ **Implement data loading parallelization** (3-4x faster)
+14. ✅ **Consider virtual threads migration** (Java 21+)
+
+### Long-term (Next Quarter)
+
+15. ✅ Prepare for intraday data handling
+16. ✅ Implement upsert pattern for EOD updates
+17. ✅ Performance testing with live data feeds
+
+---
+
+**Expected Overall Performance Improvement:** 80-90% (indexes + caching) + 700-800% (parallelization)
+
+**Combined Expected Performance:**
+- Strategy execution: 5-10 sec → **0.3-0.5 sec** (10-20x improvement)
+- Screening: 15-30 sec → **2-3 sec** (7-10x improvement)
+- Data loading: 5-10 sec → **2-3 sec** (3-4x improvement)
+
+**Key Success Metric:** Strategy execution time reduced from 5-10 seconds to < 0.5 seconds
