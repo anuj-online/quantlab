@@ -11,6 +11,7 @@ import com.quantlab.backend.dto.TradeSignalResponse;
 import com.quantlab.backend.entity.*;
 import com.quantlab.backend.mapper.PaperTradeMapper;
 import com.quantlab.backend.mapper.TradeSignalMapper;
+import com.quantlab.backend.marketdata.CompositeMarketDataProvider;
 import com.quantlab.backend.repository.*;
 import com.quantlab.backend.strategy.AnalyticsEngine;
 import com.quantlab.backend.strategy.PaperTradingEngine;
@@ -47,6 +48,7 @@ public class StrategyRunService {
     private final PaperTradeRepository paperTradeRepository;
     private final InstrumentRepository instrumentRepository;
     private final CandleRepository candleRepository;
+    private final CompositeMarketDataProvider compositeMarketDataProvider;
     private final ObjectMapper objectMapper;
     private final StrategyRegistry strategyRegistry;
     private final PaperTradingEngine paperTradingEngine;
@@ -59,6 +61,7 @@ public class StrategyRunService {
             PaperTradeRepository paperTradeRepository,
             InstrumentRepository instrumentRepository,
             CandleRepository candleRepository,
+            CompositeMarketDataProvider compositeMarketDataProvider,
             ObjectMapper objectMapper,
             StrategyRegistry strategyRegistry,
             PaperTradingEngine paperTradingEngine,
@@ -69,6 +72,7 @@ public class StrategyRunService {
         this.paperTradeRepository = paperTradeRepository;
         this.instrumentRepository = instrumentRepository;
         this.candleRepository = candleRepository;
+        this.compositeMarketDataProvider = compositeMarketDataProvider;
         this.objectMapper = objectMapper;
         this.strategyRegistry = strategyRegistry;
         this.paperTradingEngine = paperTradingEngine;
@@ -147,9 +151,10 @@ public class StrategyRunService {
         // Generate signals for each instrument
         List<com.quantlab.backend.domain.TradeSignal> allDomainSignals = new java.util.ArrayList<>();
         for (Instrument instrument : instruments) {
-            // Load candles for this instrument in date range
-            List<Candle> candles = candleRepository.findByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(
-                    instrument.getId(), startDate, endDate);
+            // Load candles for this instrument in date range using composite provider
+            // Yahoo Finance fallback is configurable via marketdata.backtest.allowYahooFallback
+            List<Candle> candles = compositeMarketDataProvider.getDailyCandlesForBacktest(
+                    instrument.getSymbol(), startDate, endDate);
 
             if (candles.isEmpty()) {
                 log.debug("No candles found for instrument: {} in date range", instrument.getSymbol());
@@ -191,8 +196,8 @@ public class StrategyRunService {
         // Load all candles for paper trading (need full history for all instruments)
         List<Candle> allCandles = new java.util.ArrayList<>();
         for (Instrument instrument : instruments) {
-            List<Candle> instrumentCandles = candleRepository.findByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(
-                    instrument.getId(), startDate, endDate);
+            List<Candle> instrumentCandles = compositeMarketDataProvider.getDailyCandlesForBacktest(
+                    instrument.getSymbol(), startDate, endDate);
             allCandles.addAll(instrumentCandles);
         }
 
