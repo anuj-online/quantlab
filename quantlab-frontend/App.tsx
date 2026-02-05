@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import StrategyConfig from './pages/StrategyConfig';
 import Signals from './pages/Signals';
 import PaperTrades from './pages/PaperTrades';
+import ActiveTrades from './pages/ActiveTrades';
 import ScreeningDashboard from './pages/ScreeningDashboard';
 import StrategyComparison from './pages/StrategyComparison';
 
@@ -32,6 +33,7 @@ const App: React.FC = () => {
           <Route path="/" element={<Dashboard runId={activeRunId} />} />
           <Route path="/configure" element={<StrategyConfig onRunCompleted={handleRunStrategy} />} />
           <Route path="/signals" element={<Signals runId={activeRunId} />} />
+          <Route path="/active-trades" element={<ActiveTrades runId={activeRunId} />} />
           <Route path="/trades" element={<PaperTrades runId={activeRunId} />} />
           <Route path="/screening" element={<ScreeningDashboard />} />
           <Route path="/compare" element={<StrategyComparison />} />

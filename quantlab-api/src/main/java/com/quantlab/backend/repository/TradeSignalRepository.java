@@ -1,6 +1,7 @@
 package com.quantlab.backend.repository;
 
 import com.quantlab.backend.entity.TradeSignal;
+import com.quantlab.backend.entity.TradeSignalStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -69,4 +70,21 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
      * @param strategyRunId the strategy run ID
      */
     void deleteByStrategyRunId(Long strategyRunId);
+
+    /**
+     * Find all trade signals for a specific strategy run and status.
+     *
+     * @param strategyRunId the strategy run ID
+     * @param status the status
+     * @return list of trade signals
+     */
+    List<TradeSignal> findByStrategyRunIdAndStatus(Long strategyRunId, TradeSignalStatus status);
+
+    /**
+     * Find all trade signals with a specific status.
+     *
+     * @param status the status
+     * @return list of trade signals
+     */
+    List<TradeSignal> findByStatus(TradeSignalStatus status);
 }

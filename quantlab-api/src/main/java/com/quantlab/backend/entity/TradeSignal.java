@@ -41,10 +41,27 @@ public class TradeSignal {
     @Column(name = "target_price", precision = 19, scale = 4)
     private BigDecimal targetPrice;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private TradeSignalStatus status;
+
     @Column(nullable = false)
     private Integer quantity;
 
     public TradeSignal() {
+    }
+
+    public TradeSignal(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate signalDate, Side side, BigDecimal entryPrice, BigDecimal stopLoss, BigDecimal targetPrice, Integer quantity, TradeSignalStatus status) {
+        this.id = id;
+        this.strategyRun = strategyRun;
+        this.instrument = instrument;
+        this.signalDate = signalDate;
+        this.side = side;
+        this.entryPrice = entryPrice;
+        this.stopLoss = stopLoss;
+        this.targetPrice = targetPrice;
+        this.quantity = quantity;
+        this.status = status;
     }
 
     public TradeSignal(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate signalDate, Side side, BigDecimal entryPrice, BigDecimal stopLoss, BigDecimal targetPrice, Integer quantity) {
@@ -57,6 +74,7 @@ public class TradeSignal {
         this.stopLoss = stopLoss;
         this.targetPrice = targetPrice;
         this.quantity = quantity;
+        this.status = TradeSignalStatus.PENDING;
     }
 
     public Long getId() {
@@ -129,6 +147,14 @@ public class TradeSignal {
 
     public void setQuantity(Integer quantity) {
         this.quantity = quantity;
+    }
+
+    public TradeSignalStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(TradeSignalStatus status) {
+        this.status = status;
     }
 
     @Override

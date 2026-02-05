@@ -47,18 +47,27 @@ export interface Signal {
   stopLoss: number | null;
   targetPrice: number | null;
   quantity: number;
-  strategy?: string;
+  strategy?: string | null;
 }
 
 export interface PaperTrade {
+  id: number;
   symbol: string;
   entryDate: string;
-  exitDate: string;
+  exitDate?: string;
   entryPrice: number;
-  exitPrice: number;
+  exitPrice?: number;
   quantity: number;
-  pnl: number;
-  pnlPct: number;
+  pnl?: number;
+  pnlPct?: number;
+  status: 'OPEN' | 'CLOSED';
+  exitReason?: 'STOP_LOSS' | 'TARGET' | 'TIME' | 'MANUAL';
+  currentPrice?: number;
+  unrealizedPnl?: number;
+  unrealizedPnlPct?: number;
+  rMultiple?: number;
+  stopLoss?: number;
+  targetPrice?: number;
 }
 
 export interface AnalyticsSummary {

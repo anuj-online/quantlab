@@ -66,6 +66,16 @@ export const apiService = {
     return handleResponse<PaperTrade[]>(response);
   },
 
+  async getActiveTrades(runId: number): Promise<PaperTrade[]> {
+    const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/active-trades`);
+    return handleResponse<PaperTrade[]>(response);
+  },
+
+  async getProfitPositions(runId: number): Promise<PaperTrade[]> {
+    const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/profit-positions`);
+    return handleResponse<PaperTrade[]>(response);
+  },
+
   async getAnalytics(runId: number): Promise<AnalyticsSummary> {
     const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/analytics`);
     return handleResponse<AnalyticsSummary>(response);

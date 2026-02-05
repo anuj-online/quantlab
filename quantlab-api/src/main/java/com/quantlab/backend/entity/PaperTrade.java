@@ -31,11 +31,37 @@ public class PaperTrade {
     @Column(name = "entry_price", nullable = false, precision = 19, scale = 4)
     private BigDecimal entryPrice;
 
+    @Column(name = "stop_loss", precision = 19, scale = 4)
+    private BigDecimal stopLoss;
+
+    @Column(name = "target_price", precision = 19, scale = 4)
+    private BigDecimal targetPrice;
+
     @Column(name = "exit_date", nullable = false)
     private LocalDate exitDate;
 
-    @Column(name = "exit_price", nullable = false, precision = 19, scale = 4)
+    @Column(name = "exit_price", precision = 19, scale = 4)
     private BigDecimal exitPrice;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private PaperTradeStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private ExitReason exitReason;
+
+    @Column(precision = 15, scale = 4)
+    private BigDecimal currentPrice;
+
+    @Column(precision = 15, scale = 4)
+    private BigDecimal unrealizedPnl;
+
+    @Column(name = "unrealized_pnl_pct", precision = 10, scale = 4)
+    private BigDecimal unrealizedPnlPct;
+
+    @Column(precision = 10, scale = 4)
+    private BigDecimal rMultiple;
 
     @Column(nullable = false)
     private Integer quantity;
@@ -49,7 +75,7 @@ public class PaperTrade {
     public PaperTrade() {
     }
 
-    public PaperTrade(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate entryDate, BigDecimal entryPrice, LocalDate exitDate, BigDecimal exitPrice, Integer quantity, BigDecimal pnl, BigDecimal pnlPct) {
+    public PaperTrade(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate entryDate, BigDecimal entryPrice, LocalDate exitDate, BigDecimal exitPrice, Integer quantity, BigDecimal pnl, BigDecimal pnlPct, PaperTradeStatus status, ExitReason exitReason, BigDecimal currentPrice, BigDecimal unrealizedPnl, BigDecimal unrealizedPnlPct, BigDecimal rMultiple) {
         this.id = id;
         this.strategyRun = strategyRun;
         this.instrument = instrument;
@@ -60,6 +86,31 @@ public class PaperTrade {
         this.quantity = quantity;
         this.pnl = pnl;
         this.pnlPct = pnlPct;
+        this.status = status;
+        this.exitReason = exitReason;
+        this.currentPrice = currentPrice;
+        this.unrealizedPnl = unrealizedPnl;
+        this.unrealizedPnlPct = unrealizedPnlPct;
+        this.rMultiple = rMultiple;
+    }
+
+    public PaperTrade(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate entryDate, BigDecimal entryPrice, Integer quantity) {
+        this.id = id;
+        this.strategyRun = strategyRun;
+        this.instrument = instrument;
+        this.entryDate = entryDate;
+        this.entryPrice = entryPrice;
+        this.quantity = quantity;
+        this.status = PaperTradeStatus.OPEN;
+        this.exitReason = null;
+        this.currentPrice = null;
+        this.unrealizedPnl = null;
+        this.unrealizedPnlPct = null;
+        this.rMultiple = null;
+        this.exitDate = null;
+        this.exitPrice = null;
+        this.pnl = null;
+        this.pnlPct = null;
     }
 
     public Long getId() {
@@ -102,6 +153,22 @@ public class PaperTrade {
         this.entryPrice = entryPrice;
     }
 
+    public BigDecimal getStopLoss() {
+        return stopLoss;
+    }
+
+    public void setStopLoss(BigDecimal stopLoss) {
+        this.stopLoss = stopLoss;
+    }
+
+    public BigDecimal getTargetPrice() {
+        return targetPrice;
+    }
+
+    public void setTargetPrice(BigDecimal targetPrice) {
+        this.targetPrice = targetPrice;
+    }
+
     public LocalDate getExitDate() {
         return exitDate;
     }
@@ -140,6 +207,54 @@ public class PaperTrade {
 
     public void setPnlPct(BigDecimal pnlPct) {
         this.pnlPct = pnlPct;
+    }
+
+    public PaperTradeStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(PaperTradeStatus status) {
+        this.status = status;
+    }
+
+    public ExitReason getExitReason() {
+        return exitReason;
+    }
+
+    public void setExitReason(ExitReason exitReason) {
+        this.exitReason = exitReason;
+    }
+
+    public BigDecimal getCurrentPrice() {
+        return currentPrice;
+    }
+
+    public void setCurrentPrice(BigDecimal currentPrice) {
+        this.currentPrice = currentPrice;
+    }
+
+    public BigDecimal getUnrealizedPnl() {
+        return unrealizedPnl;
+    }
+
+    public void setUnrealizedPnl(BigDecimal unrealizedPnl) {
+        this.unrealizedPnl = unrealizedPnl;
+    }
+
+    public BigDecimal getUnrealizedPnlPct() {
+        return unrealizedPnlPct;
+    }
+
+    public void setUnrealizedPnlPct(BigDecimal unrealizedPnlPct) {
+        this.unrealizedPnlPct = unrealizedPnlPct;
+    }
+
+    public BigDecimal getRMultiple() {
+        return rMultiple;
+    }
+
+    public void setRMultiple(BigDecimal rMultiple) {
+        this.rMultiple = rMultiple;
     }
 
     @Override
