@@ -1,7 +1,9 @@
 
 import {
   Instrument, Strategy, StrategyRunRequest, StrategyRunResponse,
-  Signal, PaperTrade, AnalyticsSummary, EquityCurvePoint, MarketType
+  Signal, PaperTrade, AnalyticsSummary, EquityCurvePoint, MarketType,
+  ScreeningRequest, ScreeningResult, StrategyComparisonRequest,
+  StrategyComparisonResponse, StrategyMetrics
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -72,5 +74,43 @@ export const apiService = {
   async getEquityCurve(runId: number): Promise<EquityCurvePoint[]> {
     const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/equity-curve`);
     return handleResponse<EquityCurvePoint[]>(response);
+  },
+
+  async runScreening(strategyCodes: string[], date: string): Promise<ScreeningResult> {
+    const payload: ScreeningRequest = { strategyCodes, date };
+    const response = await fetch(`${BASE_URL}/screening/run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse<ScreeningResult>(response);
+  },
+
+  async compareStrategies(payload: StrategyComparisonRequest): Promise<StrategyComparisonResponse> {
+    const response = await fetch(`${BASE_URL}/strategies/compare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse<StrategyComparisonResponse>(response);
+  },
+
+  async getStrategyMetrics(
+    strategyCode: string,
+    market: MarketType,
+    startDate: string,
+    endDate: string
+  ): Promise<StrategyMetrics> {
+    const params = new URLSearchParams({
+      market,
+      startDate,
+      endDate
+    });
+    const response = await fetch(`${BASE_URL}/strategies/${strategyCode}/metrics?${params}`);
+    return handleResponse<StrategyMetrics>(response);
   }
 };

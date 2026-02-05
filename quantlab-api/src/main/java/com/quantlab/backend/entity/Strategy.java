@@ -26,15 +26,24 @@ public class Strategy {
     @Column(nullable = false)
     private Boolean active = true;
 
+    @Column(nullable = false)
+    private Boolean supportsScreening = true;
+
+    @Column(nullable = false)
+    private Integer minLookbackDays = 20;
+
     public Strategy() {
     }
 
-    public Strategy(Long id, String code, String name, String description, Boolean active) {
+    public Strategy(Long id, String code, String name, String description, Boolean active,
+                    Boolean supportsScreening, Integer minLookbackDays) {
         this.id = id;
         this.code = code;
         this.name = name;
         this.description = description;
         this.active = active;
+        this.supportsScreening = supportsScreening;
+        this.minLookbackDays = minLookbackDays;
     }
 
     public Long getId() {
@@ -75,6 +84,22 @@ public class Strategy {
 
     public void setActive(Boolean active) {
         this.active = active;
+    }
+
+    public Boolean getSupportsScreening() {
+        return supportsScreening;
+    }
+
+    public void setSupportsScreening(Boolean supportsScreening) {
+        this.supportsScreening = supportsScreening;
+    }
+
+    public Integer getMinLookbackDays() {
+        return minLookbackDays;
+    }
+
+    public void setMinLookbackDays(Integer minLookbackDays) {
+        this.minLookbackDays = minLookbackDays;
     }
 
     @Override

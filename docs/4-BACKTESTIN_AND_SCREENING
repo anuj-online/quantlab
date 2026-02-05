@@ -1,0 +1,210 @@
+Below is a clean, framework-level design that supports:
+
+✅ Backtesting
+
+✅ Next-day screening
+
+✅ Multiple strategies
+
+✅ Same inputs / same outputs
+
+✅ Zero duplication
+
+Concise, but complete.
+
+1️⃣ Key Concept Shift
+One Strategy → Two Execution Modes
+
+Every strategy can run in two modes:
+
+BACKTEST   → generate historical trades
+SCREEN     → generate tomorrow’s actionable signals
+
+
+Same algorithm. Same code. Different context.
+
+2️⃣ Strategy Interface (Final Shape)
+public interface Strategy {
+
+    String code();        // "EOD_BREAKOUT"
+    String name();        // "EOD Breakout with Volume"
+
+    StrategyType type();  // BACKTEST | SCREEN | BOTH
+
+    StrategyResult evaluate(StrategyContext context);
+}
+
+Why this works
+
+Backtest and screening share evaluation logic
+
+Context controls behavior
+
+Strategy decides if it supports screening or not
+
+3️⃣ StrategyContext (critical)
+public class StrategyContext {
+    private List<Candle> candles;     // sorted ASC
+    private ExecutionMode mode;        // BACKTEST | SCREEN
+    private LocalDate runDate;         // "today"
+    private StrategyParams params;
+}
+
+Mode behavior
+Mode	Candle set
+BACKTEST	Full history
+SCREEN	Last N days (e.g. 20–50)
+4️⃣ Strategy Output (Unified)
+public class StrategyResult {
+    private List<TradeSignal> signals;
+    private boolean isActionable;   // true = valid for next trading day
+}
+
+TradeSignal
+public class TradeSignal {
+    private String symbol;
+    private LocalDate signalDate;
+    private SignalSide side;     // BUY / SELL
+    private double entryPrice;
+    private double stopLoss;
+    private double target;
+    private String strategyCode;
+}
+
+5️⃣ Screening vs Backtesting (Rule)
+Feature	Backtest	Screening
+Signal Date	Historical	Latest candle date
+Entry Price	Close/Open	Tomorrow open (assumed)
+Output	Trades	Watchlist
+Execution	Simulated	Human / Auto
+6️⃣ Strategy 1 — EOD Breakout (Screen + Backtest)
+Screening Rule
+
+“If breakout happens on latest candle, show it for tomorrow.”
+
+Pseudo-Logic
+if (isBreakout(today, history)) {
+    emitSignal(today);
+    if (context.mode == SCREEN) {
+        result.setActionable(true);
+    }
+}
+
+Screening Example Output
+Symbol	Entry	SL	Target	Strategy
+TCS	3850	3720	4110	EOD_BREAKOUT
+7️⃣ Strategy 2 — SMA Crossover (Screening)
+Screening Rule
+
+Fast SMA crosses above Slow SMA today
+
+boolean crossedToday =
+    prevFast <= prevSlow &&
+    currFast > currSlow;
+
+if (crossedToday) emitSignal(today);
+
+Notes
+
+Works perfectly for screening
+
+UI shows trend direction
+
+8️⃣ Strategy 3 — NR4 + Inside Bar (Excellent Screener)
+Algorithm
+
+Today’s range = smallest of last 4 days
+
+Today is inside previous day’s range
+
+boolean isNR4 = today.range() == min(last4Ranges);
+boolean insideBar =
+    today.high <= yesterday.high &&
+    today.low >= yesterday.low;
+
+Screening Output
+
+“Volatility contraction — breakout expected tomorrow”
+
+9️⃣ How Screening API Works
+Backend API
+POST /screen/run
+
+{
+  "strategyCodes": ["EOD_BREAKOUT", "SMA_CROSS", "NR4"],
+  "date": "2026-02-03"
+}
+
+Backend Flow
+for each strategy
+  for each symbol
+    load last N candles
+    run strategy in SCREEN mode
+    collect actionable signals
+
+🔟 DB Tables (Minimal Additions)
+Screening Results
+screening_results
+-----------------
+id
+run_date
+symbol
+strategy_code
+signal_type
+entry
+stop_loss
+target
+created_at
+
+
+You do not mix this with paper trades.
+
+1️⃣1️⃣ UI View (Very Important)
+Screening Dashboard
+[ Date Picker ] [ Run Screening ]
+
+Strategy: EOD_BREAKOUT
+--------------------------------
+✓ TCS   BUY 3850 SL 3720 TG 4110
+✓ INFY BUY 1680 SL 1620 TG 1820
+
+Strategy: NR4
+--------------------------------
+✓ RELIANCE  VOLATILITY SQUEEZE
+
+UX Rule
+
+Screening ≠ Trades
+
+No PnL shown
+
+Only next-day intent
+
+1️⃣2️⃣ Strategy Lifecycle (Your Framework)
+Strategy → Register → Run Backtest → Run Screen → View Results
+
+
+✔ Inputs fixed
+✔ Outputs fixed
+✔ Algorithm isolated
+
+You’ve built a real quant research engine.
+
+Final Confirmation (Your Question)
+
+“This means framework inputs & outputs are constant, only algorithm changes?”
+
+✅ Yes. 100%.
+That is exactly how professional quant platforms work.
+
+What I Recommend Next (Order)
+
+Add SCREEN execution mode
+
+Add screening_results table
+
+Implement NR4 + Inside Bar first
+
+UI: Screening dashboard
+
+Then add multi-strategy consensus screener

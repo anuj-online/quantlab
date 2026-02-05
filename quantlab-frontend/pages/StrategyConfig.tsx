@@ -18,9 +18,13 @@ const StrategyConfig: React.FC<StrategyConfigProps> = ({ onRunCompleted }) => {
     slowEma: 50,
     riskPerTrade: 0.01
   });
-  
+
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+
+  const getSelectedStrategyDetails = () => {
+    return strategies.find(s => s.code === selectedStrategy);
+  };
 
   useEffect(() => {
     const fetchStrategies = async () => {
@@ -94,7 +98,7 @@ const StrategyConfig: React.FC<StrategyConfigProps> = ({ onRunCompleted }) => {
 
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Algorithm</label>
-              <select 
+              <select
                 value={selectedStrategy}
                 onChange={(e) => setSelectedStrategy(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
@@ -103,8 +107,54 @@ const StrategyConfig: React.FC<StrategyConfigProps> = ({ onRunCompleted }) => {
                   <option key={s.id} value={s.code}>{s.name}</option>
                 ))}
               </select>
+              {(() => {
+                const strategy = getSelectedStrategyDetails();
+                if (!strategy) return null;
+                return (
+                  <div className="mt-2 flex items-center gap-2">
+                    {strategy.supportsScreening && (
+                      <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 text-[10px] font-bold uppercase rounded border border-blue-500/20">
+                        Screening
+                      </span>
+                    )}
+                    <span className="text-[10px] text-slate-500">
+                      Min Lookback: {strategy.minLookbackDays} days
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
+
+          {/* Strategy Info Section */}
+          {(() => {
+            const strategy = getSelectedStrategyDetails();
+            if (!strategy) return null;
+            return (
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">About This Strategy</h4>
+                <p className="text-sm text-slate-300">
+                  {strategy.description || 'No description available for this strategy.'}
+                </p>
+                <div className="flex items-center gap-4 mt-3 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500">Code:</span>
+                    <span className="font-mono text-emerald-400">{strategy.code}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500">Min Lookback:</span>
+                    <span className="text-slate-300">{strategy.minLookbackDays} days</span>
+                  </div>
+                  {strategy.supportsScreening && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500">Screening:</span>
+                      <span className="text-blue-400 font-semibold">Supported</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Time Frame */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

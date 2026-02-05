@@ -7,6 +7,8 @@ const navItems = [
   { path: '/configure', label: 'Strategy Config', icon: '⚙️' },
   { path: '/signals', label: 'Signals', icon: '📡' },
   { path: '/trades', label: 'Paper Trades', icon: '📝' },
+  { path: '/screening', label: 'Screening', icon: '🔍' },
+  { path: '/compare', label: 'Compare', icon: '📈' },
 ];
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {

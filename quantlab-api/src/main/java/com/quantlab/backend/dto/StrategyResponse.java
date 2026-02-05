@@ -15,13 +15,35 @@ public class StrategyResponse {
     @JsonProperty("name")
     private String name;
 
+    @JsonProperty("description")
+    private String description;
+
+    @JsonProperty("supportsScreening")
+    private Boolean supportsScreening;
+
+    @JsonProperty("minLookbackDays")
+    private Integer minLookbackDays;
+
     public StrategyResponse() {
     }
 
-    public StrategyResponse(Long id, String code, String name) {
+    public StrategyResponse(Long id, String code, String name, String description,
+                            Boolean supportsScreening, Integer minLookbackDays) {
         this.id = id;
         this.code = code;
         this.name = name;
+        this.description = description;
+        this.supportsScreening = supportsScreening;
+        this.minLookbackDays = minLookbackDays;
+    }
+
+    /**
+     * Legacy constructor for backward compatibility.
+     * @deprecated Use the full constructor with all metadata fields
+     */
+    @Deprecated
+    public StrategyResponse(Long id, String code, String name) {
+        this(id, code, name, null, true, 20);
     }
 
     public Long getId() {
@@ -48,6 +70,30 @@ public class StrategyResponse {
         this.name = name;
     }
 
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public Boolean getSupportsScreening() {
+        return supportsScreening;
+    }
+
+    public void setSupportsScreening(Boolean supportsScreening) {
+        this.supportsScreening = supportsScreening;
+    }
+
+    public Integer getMinLookbackDays() {
+        return minLookbackDays;
+    }
+
+    public void setMinLookbackDays(Integer minLookbackDays) {
+        this.minLookbackDays = minLookbackDays;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -55,12 +101,15 @@ public class StrategyResponse {
         StrategyResponse that = (StrategyResponse) o;
         return Objects.equals(id, that.id) &&
                Objects.equals(code, that.code) &&
-               Objects.equals(name, that.name);
+               Objects.equals(name, that.name) &&
+               Objects.equals(description, that.description) &&
+               Objects.equals(supportsScreening, that.supportsScreening) &&
+               Objects.equals(minLookbackDays, that.minLookbackDays);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, code, name);
+        return Objects.hash(id, code, name, description, supportsScreening, minLookbackDays);
     }
 
     @Override
@@ -69,6 +118,9 @@ public class StrategyResponse {
                 "id=" + id +
                 ", code='" + code + '\'' +
                 ", name='" + name + '\'' +
+                ", description='" + description + '\'' +
+                ", supportsScreening=" + supportsScreening +
+                ", minLookbackDays=" + minLookbackDays +
                 '}';
     }
 }

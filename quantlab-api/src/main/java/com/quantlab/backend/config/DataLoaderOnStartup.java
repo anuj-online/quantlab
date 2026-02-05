@@ -24,6 +24,8 @@ import java.util.stream.Stream;
  * Files are processed in chronological order (by filename date).
  * This ensures data is loaded in the correct sequence.
  *
+ * File format: YYYYMMDD_NSE.csv (e.g., 20250701_NSE.csv)
+ *
  * Designed to support both:
  * - Application startup (ApplicationReadyEvent)
  * - Future @Scheduled cron tasks
@@ -34,10 +36,10 @@ public class DataLoaderOnStartup {
     private static final Logger log = LoggerFactory.getLogger(DataLoaderOnStartup.class);
 
     /**
-     * Pattern for Bhavcopy files: sec_bhavdata_full_*.csv
-     * Example: sec_bhavdata_full_01022026.csv
+     * Pattern for Bhavcopy files: *_NSE.csv
+     * Example: 20250701_NSE.csv (format: YYYYMMDD_NSE.csv)
      */
-    private static final String BHAVCOPY_FILE_PATTERN = "sec_bhavdata_full_*.csv";
+    private static final String BHAVCOPY_FILE_PATTERN = "*_NSE.csv";
 
     private final BhavcopyLoaderService bhavcopyLoaderService;
 
@@ -53,7 +55,7 @@ public class DataLoaderOnStartup {
      * Triggered when the Spring Boot application is fully ready.
      * Loads all Bhavcopy CSV files from the configured directory.
      */
-    @EventListener(ApplicationReadyEvent.class)
+//    @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         log.info("Application ready. Starting Bhavcopy data loading...");
         loadAllBhavcopyFiles();
@@ -110,20 +112,21 @@ public class DataLoaderOnStartup {
 
     /**
      * Check if a file matches the Bhavcopy naming pattern.
+     * New format: YYYYMMDD_NSE.csv
+     * Example: 20250701_NSE.csv
      *
      * @param path file path
      * @return true if file matches pattern
      */
     private boolean isBhavcopyFile(Path path) {
         String fileName = path.getFileName().toString();
-        return fileName.startsWith("sec_bhavdata_full_") &&
-                fileName.endsWith(".csv") &&
-                fileName.length() == "sec_bhavdata_full_.csv".length() + 8; // 8 digits for DDMMYYYY
+        return fileName.endsWith("_NSE.csv") &&
+                fileName.length() == "_NSE.csv".length() + 8; // 8 digits for YYYYMMDD
     }
 
     /**
      * Compare two Bhavcopy files by the date embedded in their filenames.
-     * Format: sec_bhavdata_full_DDMMYYYY.csv
+     * Format: YYYYMMDD_NSE.csv
      *
      * @param p1 first file path
      * @param p2 second file path
@@ -148,27 +151,27 @@ public class DataLoaderOnStartup {
 
     /**
      * Extract date from Bhavcopy filename.
-     * Format: sec_bhavdata_full_DDMMYYYY.csv -> LocalDate
+     * New format: YYYYMMDD_NSE.csv -> LocalDate
      *
-     * Example: sec_bhavdata_full_01022026.csv -> 2026-02-01
+     * Example: 20250701_NSE.csv -> 2025-07-01
      *
      * @param filename the filename
      * @return LocalDate or null if parsing fails
      */
     private LocalDate extractDateFromFilename(String filename) {
         try {
-            // Extract DDMMYYYY part: sec_bhavdata_full_01022026.csv
-            String baseName = filename.replace(".csv", "");
-            String dateStr = baseName.substring("sec_bhavdata_full_".length());
+            // Extract YYYYMMDD part: 20250701_NSE.csv
+            String baseName = filename.replace("_NSE.csv", "");
+            String dateStr = baseName;
 
             if (dateStr.length() != 8) {
                 log.warn("Unexpected filename format: {}", filename);
                 return null;
             }
 
-            int day = Integer.parseInt(dateStr.substring(0, 2));
-            int month = Integer.parseInt(dateStr.substring(2, 4));
-            int year = Integer.parseInt(dateStr.substring(4, 8));
+            int year = Integer.parseInt(dateStr.substring(0, 4));
+            int month = Integer.parseInt(dateStr.substring(4, 6));
+            int day = Integer.parseInt(dateStr.substring(6, 8));
 
             return LocalDate.of(year, month, day);
 
