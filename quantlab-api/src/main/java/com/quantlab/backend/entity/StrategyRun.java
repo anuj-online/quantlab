@@ -1,6 +1,8 @@
 package com.quantlab.backend.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDate;
 
@@ -25,7 +27,8 @@ public class StrategyRun {
     @Column(nullable = false, length = 10)
     private MarketType market;
 
-    @Column(name = "params_json", columnDefinition = "TEXT")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "params_json", nullable = false)
     private String paramsJson;
 
     @Column(name = "start_date", nullable = false)

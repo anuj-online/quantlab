@@ -83,9 +83,9 @@ const Signals: React.FC<SignalsProps> = ({ runId }) => {
                     {signal.side}
                   </span>
                 </td>
-                <td className="px-6 py-4 text-slate-300 mono">${signal.entryPrice.toFixed(2)}</td>
-                <td className="px-6 py-4 text-rose-400/80 mono">${signal.stopLoss.toFixed(2)}</td>
-                <td className="px-6 py-4 text-emerald-400/80 mono">${signal.targetPrice.toFixed(2)}</td>
+                <td className="px-6 py-4 text-slate-300 mono">{signal.entryPrice.toFixed(2)}</td>
+                <td className="px-6 py-4 text-rose-400/80 mono">{signal.stopLoss !== null ? signal.stopLoss.toFixed(2) : 'N/A'}</td>
+                <td className="px-6 py-4 text-emerald-400/80 mono">{signal.targetPrice !== null ? signal.targetPrice.toFixed(2) : 'N/A'}</td>
                 <td className="px-6 py-4 text-slate-300 mono">{signal.quantity}</td>
                 <td className="px-6 py-4 text-slate-500 text-xs">{signal.strategy}</td>
               </tr>

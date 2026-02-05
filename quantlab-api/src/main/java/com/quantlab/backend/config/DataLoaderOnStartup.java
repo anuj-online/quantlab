@@ -53,7 +53,7 @@ public class DataLoaderOnStartup {
      * Triggered when the Spring Boot application is fully ready.
      * Loads all Bhavcopy CSV files from the configured directory.
      */
-    @EventListener(ApplicationReadyEvent.class)
+//    @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         log.info("Application ready. Starting Bhavcopy data loading...");
         loadAllBhavcopyFiles();

@@ -25,6 +25,15 @@ public interface PaperTradeRepository extends JpaRepository<PaperTrade, Long> {
     List<PaperTrade> findByStrategyRunIdOrderByEntryDateAsc(Long strategyRunId);
 
     /**
+     * Find all paper trades for a specific strategy run, ordered by exit date ascending.
+     * Used for equity curve calculation where exit date determines when PnL is realized.
+     *
+     * @param strategyRunId the strategy run ID
+     * @return list of paper trades ordered by exit date
+     */
+    List<PaperTrade> findByStrategyRunIdOrderByExitDateAsc(Long strategyRunId);
+
+    /**
      * Find all paper trades for a specific strategy run and instrument.
      *
      * @param strategyRunId the strategy run ID

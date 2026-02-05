@@ -31,8 +31,8 @@ export interface Signal {
   signalDate: string;
   side: 'BUY' | 'SELL';
   entryPrice: number;
-  stopLoss: number;
-  targetPrice: number;
+  stopLoss: number | null;
+  targetPrice: number | null;
   quantity: number;
   strategy?: string;
 }

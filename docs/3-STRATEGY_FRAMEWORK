@@ -1,0 +1,214 @@
+The framework idea:
+
+Input → Candle list + params
+
+Output → List<TradeSignal>
+
+Engine: Paper trades & analytics
+
+Strategy implementation: isolated, pluggable
+
+UI: only reads strategy metadata, signals, paper_trades, analytics
+
+So each new strategy: you provide algorithm → Claude generates Java code → plug into framework → run → see results in UI. ✅
+
+I’ll provide 3 strategy examples with:
+
+Algorithm description
+
+Pseudo-code (Java style)
+
+UI display notes
+
+Strategy registration notes
+
+STRATEGY 1 — EOD Breakout with Volume (already discussed)
+
+Algorithm:
+
+Buy if today’s close > last 20-day high AND volume > 1.5× average volume of last 20 days
+
+Stop loss = lowest low of last 20 days
+
+Target = entry + 2× risk
+
+Pseudo-code (Java style)
+
+class EODBreakoutVolStrategy implements Strategy {
+    @Override
+    List<TradeSignal> generateSignals(List<Candle> candles, StrategyParams params) {
+        int lookback = params.getInt("lookbackDays", 20);
+        double volMult = params.getDouble("volumeMultiplier", 1.5);
+        List<TradeSignal> signals = new ArrayList<>();
+
+        for (int i = lookback; i < candles.size(); i++) {
+            Candle today = candles.get(i);
+            List<Candle> history = candles.subList(i - lookback, i);
+
+            double highestHigh = history.stream().mapToDouble(Candle::getHigh).max().getAsDouble();
+            double avgVolume = history.stream().mapToDouble(Candle::getVolume).average().getAsDouble();
+
+            if (today.getClose() > highestHigh && today.getVolume() > volMult * avgVolume) {
+                double stopLoss = history.stream().mapToDouble(Candle::getLow).min().getAsDouble();
+                double target = today.getClose() + 2 * (today.getClose() - stopLoss);
+
+                TradeSignal signal = new TradeSignal(
+                    today.getInstrument(),
+                    today.getTradeDate(),
+                    SignalSide.BUY,
+                    today.getClose(),
+                    stopLoss,
+                    target,
+                    1
+                );
+                signals.add(signal);
+            }
+        }
+        return signals;
+    }
+}
+
+
+UI Display:
+
+Table: SYMBOL | SIGNAL DATE | ENTRY | STOP | TARGET | QTY
+
+Chart: Equity curve after paper trade simulation
+
+Analytics: Win rate, total trades, max drawdown
+
+STRATEGY 2 — Simple Moving Average Crossover
+
+Algorithm:
+
+Fast SMA = 5 days, Slow SMA = 20 days
+
+Buy when Fast SMA crosses above Slow SMA
+
+Sell when Fast SMA crosses below Slow SMA (for paper trading)
+
+Pseudo-code (Java style)
+
+class SMACrossoverStrategy implements Strategy {
+    @Override
+    List<TradeSignal> generateSignals(List<Candle> candles, StrategyParams params) {
+        int fast = params.getInt("fastSMA", 5);
+        int slow = params.getInt("slowSMA", 20);
+        List<TradeSignal> signals = new ArrayList<>();
+
+        for (int i = slow; i < candles.size(); i++) {
+            double fastSMA = candles.subList(i - fast, i).stream()
+                            .mapToDouble(Candle::getClose).average().orElse(0);
+            double slowSMA = candles.subList(i - slow, i).stream()
+                            .mapToDouble(Candle::getClose).average().orElse(0);
+
+            double prevFastSMA = candles.subList(i - fast - 1, i - 1).stream()
+                            .mapToDouble(Candle::getClose).average().orElse(0);
+            double prevSlowSMA = candles.subList(i - slow - 1, i - 1).stream()
+                            .mapToDouble(Candle::getClose).average().orElse(0);
+
+            if (prevFastSMA <= prevSlowSMA && fastSMA > slowSMA) {
+                // BUY
+                Candle today = candles.get(i);
+                TradeSignal signal = new TradeSignal(today.getInstrument(), today.getTradeDate(),
+                                                     SignalSide.BUY, today.getClose(), 0, 0, 1);
+                signals.add(signal);
+            }
+        }
+        return signals;
+    }
+}
+
+
+UI Display:
+
+Table: SYMBOL | SIGNAL DATE | ENTRY | QTY
+
+Chart: Close + Fast SMA + Slow SMA
+
+Analytics: PnL summary, max drawdown
+
+STRATEGY 3 — Gap-Up Momentum
+
+Algorithm:
+
+Buy if today’s open > previous close × 1.02 (2% gap-up)
+
+Exit after 3 days or when stop loss of 1% from entry is hit
+
+No volume filter
+
+Pseudo-code (Java style)
+
+class GapUpMomentumStrategy implements Strategy {
+    @Override
+    List<TradeSignal> generateSignals(List<Candle> candles, StrategyParams params) {
+        List<TradeSignal> signals = new ArrayList<>();
+        double gapThreshold = params.getDouble("gapPercent", 0.02);
+
+        for (int i = 1; i < candles.size(); i++) {
+            Candle today = candles.get(i);
+            Candle prev = candles.get(i - 1);
+
+            if ((today.getOpen() - prev.getClose()) / prev.getClose() >= gapThreshold) {
+                double stopLoss = today.getOpen() * 0.99; // 1% SL
+                TradeSignal signal = new TradeSignal(today.getInstrument(),
+                                                     today.getTradeDate(),
+                                                     SignalSide.BUY,
+                                                     today.getOpen(),
+                                                     stopLoss,
+                                                     0,
+                                                     1);
+                signals.add(signal);
+            }
+        }
+        return signals;
+    }
+}
+
+
+UI Display:
+
+Table: SYMBOL | SIGNAL DATE | ENTRY | STOP | QTY | HOLDING DAYS
+
+Chart: Open, Close, signals marked
+
+Analytics: Short-term performance, hit ratio
+
+Strategy Registration
+
+Framework assumption: Each strategy implements Strategy interface.
+
+Registration example:
+
+StrategyRegistry.register(new EODBreakoutVolStrategy());
+StrategyRegistry.register(new SMACrossoverStrategy());
+StrategyRegistry.register(new GapUpMomentumStrategy());
+
+
+Registry exposes list of strategies to API:
+
+GET /strategies
+
+
+Frontend dropdown shows name and code
+
+When user clicks “Run” → POST /strategies/run with selected code and params
+
+How UI Will Display Any Strategy
+
+Dropdown: select strategy (code + name)
+
+Form: set strategy parameters (lookback, SMA periods, thresholds)
+
+Button: Run simulation → backend generates signals + paper trades
+
+Results Tab:
+
+Table: SYMBOL | SIGNAL DATE | ENTRY | STOP | TARGET | QTY
+
+Chart: equity curve / close price + signals
+
+Analytics: total trades, win rate, max drawdown
+
+Works for any registered strategy — only the algorithm changes.
