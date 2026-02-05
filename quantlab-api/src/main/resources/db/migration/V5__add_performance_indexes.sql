@@ -13,13 +13,12 @@ CREATE INDEX IF NOT EXISTS idx_instrument_market_active
 ON instrument(market, active)
 WHERE active = true;
 
--- 2. Partial index for recent candles (screening optimization)
--- Optimizes: Screening queries for last 90 days
--- Smaller index size, faster maintenance, targets hot data
+-- 2. Index for candle queries by instrument and date
+-- Optimizes: Screening queries and date range lookups
 -- Used by: ScreeningService for recent candle lookups
-CREATE INDEX IF NOT EXISTS idx_candle_recent
-ON candle(instrument_id, trade_date DESC)
-WHERE trade_date >= CURRENT_DATE - INTERVAL '90 days';
+-- Note: Partial index removed because CURRENT_DATE is not IMMUTABLE
+CREATE INDEX IF NOT EXISTS idx_candle_instrument_date
+ON candle(instrument_id, trade_date DESC);
 
 -- 3. Covering index for analytics queries
 -- Enables index-only scans for P&L aggregations
