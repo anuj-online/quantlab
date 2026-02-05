@@ -9,7 +9,7 @@ import com.quantlab.backend.entity.MarketType;
 import com.quantlab.backend.entity.ScreeningResult;
 import com.quantlab.backend.entity.Side;
 import com.quantlab.backend.entity.SignalType;
-import com.quantlab.backend.repository.CandleRepository;
+import com.quantlab.backend.marketdata.CompositeMarketDataProvider;
 import com.quantlab.backend.repository.InstrumentRepository;
 import com.quantlab.backend.repository.ScreeningResultsRepository;
 import com.quantlab.backend.repository.StrategyRepository;
@@ -61,19 +61,19 @@ public class ScreeningService {
     private final ScreeningResultsRepository screeningResultsRepository;
     private final StrategyRepository strategyRepository;
     private final InstrumentRepository instrumentRepository;
-    private final CandleRepository candleRepository;
+    private final CompositeMarketDataProvider compositeMarketDataProvider;
     private final StrategyRegistry strategyRegistry;
 
     public ScreeningService(
             ScreeningResultsRepository screeningResultsRepository,
             StrategyRepository strategyRepository,
             InstrumentRepository instrumentRepository,
-            CandleRepository candleRepository,
+            CompositeMarketDataProvider compositeMarketDataProvider,
             StrategyRegistry strategyRegistry) {
         this.screeningResultsRepository = screeningResultsRepository;
         this.strategyRepository = strategyRepository;
         this.instrumentRepository = instrumentRepository;
-        this.candleRepository = candleRepository;
+        this.compositeMarketDataProvider = compositeMarketDataProvider;
         this.strategyRegistry = strategyRegistry;
     }
 
@@ -223,9 +223,9 @@ public class ScreeningService {
                 // Need sufficient history for strategy indicators
                 LocalDate startDate = calculateHistoricalStartDate(strategyImpl.getMinCandlesRequired(), screenDate);
 
-                List<com.quantlab.backend.entity.Candle> candles = candleRepository
-                        .findByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(
-                                instrument.getId(), startDate, screenDate);
+                // Use composite market data provider to get candles from DB + Yahoo Finance for gaps
+                List<com.quantlab.backend.entity.Candle> candles = compositeMarketDataProvider
+                        .getDailyCandlesForScreening(instrument.getSymbol(), startDate, screenDate);
 
                 if (candles.isEmpty()) {
                     log.debug("No candles found for {} up to {}", instrument.getSymbol(), screenDate);
