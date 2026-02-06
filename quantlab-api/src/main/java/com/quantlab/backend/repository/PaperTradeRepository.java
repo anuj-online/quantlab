@@ -142,4 +142,13 @@ public interface PaperTradeRepository extends JpaRepository<PaperTrade, Long> {
      * @return list of paper trades
      */
     List<PaperTrade> findByStrategyRunIdAndStatusOrderByEntryDateAsc(Long strategyRunId, PaperTradeStatus status);
+
+    /**
+     * Find all paper trades for a specific strategy code.
+     *
+     * @param strategyCode the strategy code
+     * @return list of paper trades
+     */
+    @Query("SELECT pt FROM PaperTrade pt JOIN pt.strategyRun sr WHERE sr.strategy.code = :strategyCode")
+    List<PaperTrade> findByStrategyCode(String strategyCode);
 }

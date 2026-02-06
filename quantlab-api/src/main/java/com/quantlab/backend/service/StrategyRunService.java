@@ -25,9 +25,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -148,9 +152,106 @@ public class StrategyRunService {
         Map<String, Object> params = request.getParams() != null ? request.getParams() : new HashMap<>();
         double riskPerTrade = extractDoubleParam(params, "riskPerTrade", DEFAULT_RISK_PER_TRADE);
 
-        // Generate signals for each instrument
-        List<com.quantlab.backend.domain.TradeSignal> allDomainSignals = new java.util.ArrayList<>();
-        for (Instrument instrument : instruments) {
+        // Create a thread pool for parallel candle fetching
+        // Use a fixed thread pool with size equal to number of available processors (capped at 16)
+        int threadPoolSize = Math.min(Runtime.getRuntime().availableProcessors(), 16);
+        ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+        log.info("Using thread pool of size {} for parallel candle fetching", threadPoolSize);
+
+        try {
+            // Generate signals for each instrument in parallel
+            List<com.quantlab.backend.domain.TradeSignal> allDomainSignals = new java.util.ArrayList<>();
+
+            // Create a list of CompletableFuture tasks, one for each instrument
+            // Use explicit typing helper to avoid inference issues
+            @SuppressWarnings("unchecked")
+            List<CompletableFuture<List<com.quantlab.backend.domain.TradeSignal>>> signalFutures = instruments.stream()
+                .map(instrument -> (CompletableFuture<List<com.quantlab.backend.domain.TradeSignal>>)
+                    CompletableFuture.supplyAsync(() -> processInstrument(instrument, startDate, endDate, strategyImpl, params), executorService))
+                .collect(Collectors.toList());
+
+            // Wait for all futures to complete and collect all signals
+            CompletableFuture.allOf(signalFutures.toArray(new CompletableFuture[0])).join();
+
+            for (CompletableFuture<List<com.quantlab.backend.domain.TradeSignal>> future : signalFutures) {
+                allDomainSignals.addAll(future.get());
+            }
+
+            log.info("Total signals generated: {}", allDomainSignals.size());
+
+            // Convert domain signals to entity signals and persist
+            List<TradeSignal> entitySignals = new java.util.ArrayList<>();
+            for (com.quantlab.backend.domain.TradeSignal domainSignal : allDomainSignals) {
+                TradeSignal entitySignal = convertToEntitySignal(domainSignal, strategyRun);
+
+                // Calculate position size based on risk per trade
+                int quantity = calculatePositionSize(
+                        domainSignal.getEntryPrice(),
+                        domainSignal.getStopLoss(),
+                        DEFAULT_INITIAL_CAPITAL,
+                        riskPerTrade
+                );
+                entitySignal.setQuantity(quantity);
+
+                entitySignal = tradeSignalRepository.save(entitySignal);
+                entitySignals.add(entitySignal);
+            }
+
+            log.info("Persisted {} trade signals", entitySignals.size());
+
+            // Load all candles for paper trading in parallel
+            List<Candle> allCandles = new java.util.ArrayList<>();
+
+            List<CompletableFuture<List<Candle>>> candleFutures = instruments.stream()
+                .map(instrument -> CompletableFuture.supplyAsync(() -> {
+                    List<Candle> instrumentCandles = compositeMarketDataProvider.getDailyCandlesForBacktest(
+                            instrument.getSymbol(), startDate, endDate);
+                    log.debug("Loaded {} candles for paper trading: {}", instrumentCandles.size(), instrument.getSymbol());
+                    return instrumentCandles;
+                }, executorService))
+                .collect(Collectors.toList());
+
+            // Wait for all candle futures to complete
+            CompletableFuture.allOf(candleFutures.toArray(new CompletableFuture[0])).join();
+
+            for (CompletableFuture<List<Candle>> future : candleFutures) {
+                allCandles.addAll(future.get());
+            }
+
+            // Execute paper trades
+            List<PaperTrade> paperTrades = paperTradingEngine.executePaperTrades(entitySignals, allCandles, params);
+
+            log.info("Executed {} paper trades", paperTrades.size());
+
+            // Calculate analytics
+            AnalyticsResponse analytics = analyticsEngine.calculate(paperTrades, DEFAULT_INITIAL_CAPITAL);
+
+            log.info("Strategy run completed. Total trades: {}, Win rate: {}, Total P&L: {}",
+                    analytics.getTotalTrades(), analytics.getWinRate(), analytics.getTotalPnl());
+
+            return new RunStrategyResponse(runId, "COMPLETED");
+
+        } catch (Exception e) {
+            log.error("Error during strategy run: {}", e.getMessage(), e);
+            throw new RuntimeException("Strategy run failed: " + e.getMessage(), e);
+        } finally {
+            // Shutdown the executor service
+            executorService.shutdown();
+            log.debug("Executor service shutdown completed");
+        }
+    }
+
+    /**
+     * Process a single instrument: fetch candles and generate signals.
+     * Helper method for parallel processing.
+     */
+    private List<com.quantlab.backend.domain.TradeSignal> processInstrument(
+            Instrument instrument,
+            LocalDate startDate,
+            LocalDate endDate,
+            Strategy strategyImpl,
+            Map<String, Object> params) {
+        try {
             // Load candles for this instrument in date range using composite provider
             // Yahoo Finance fallback is configurable via marketdata.backtest.allowYahooFallback
             List<Candle> candles = compositeMarketDataProvider.getDailyCandlesForBacktest(
@@ -158,7 +259,7 @@ public class StrategyRunService {
 
             if (candles.isEmpty()) {
                 log.debug("No candles found for instrument: {} in date range", instrument.getSymbol());
-                continue;
+                return Collections.emptyList();
             }
 
             log.debug("Loaded {} candles for instrument: {}", candles.size(), instrument.getSymbol());
@@ -168,51 +269,11 @@ public class StrategyRunService {
             List<com.quantlab.backend.domain.TradeSignal> signals = strategyImpl.generateSignals(candles, strategyParams);
 
             log.debug("Generated {} signals for instrument: {}", signals.size(), instrument.getSymbol());
-            allDomainSignals.addAll(signals);
+            return signals;
+        } catch (Exception e) {
+            log.error("Error processing instrument: {}", instrument.getSymbol(), e);
+            return Collections.emptyList();
         }
-
-        log.info("Total signals generated: {}", allDomainSignals.size());
-
-        // Convert domain signals to entity signals and persist
-        List<TradeSignal> entitySignals = new java.util.ArrayList<>();
-        for (com.quantlab.backend.domain.TradeSignal domainSignal : allDomainSignals) {
-            TradeSignal entitySignal = convertToEntitySignal(domainSignal, strategyRun);
-
-            // Calculate position size based on risk per trade
-            int quantity = calculatePositionSize(
-                    domainSignal.getEntryPrice(),
-                    domainSignal.getStopLoss(),
-                    DEFAULT_INITIAL_CAPITAL,
-                    riskPerTrade
-            );
-            entitySignal.setQuantity(quantity);
-
-            entitySignal = tradeSignalRepository.save(entitySignal);
-            entitySignals.add(entitySignal);
-        }
-
-        log.info("Persisted {} trade signals", entitySignals.size());
-
-        // Load all candles for paper trading (need full history for all instruments)
-        List<Candle> allCandles = new java.util.ArrayList<>();
-        for (Instrument instrument : instruments) {
-            List<Candle> instrumentCandles = compositeMarketDataProvider.getDailyCandlesForBacktest(
-                    instrument.getSymbol(), startDate, endDate);
-            allCandles.addAll(instrumentCandles);
-        }
-
-        // Execute paper trades
-        List<PaperTrade> paperTrades = paperTradingEngine.executePaperTrades(entitySignals, allCandles, params);
-
-        log.info("Executed {} paper trades", paperTrades.size());
-
-        // Calculate analytics
-        AnalyticsResponse analytics = analyticsEngine.calculate(paperTrades, DEFAULT_INITIAL_CAPITAL);
-
-        log.info("Strategy run completed. Total trades: {}, Win rate: {}, Total P&L: {}",
-                analytics.getTotalTrades(), analytics.getWinRate(), analytics.getTotalPnl());
-
-        return new RunStrategyResponse(runId, "COMPLETED");
     }
 
     /**
@@ -228,6 +289,7 @@ public class StrategyRunService {
         entity.setStopLoss(domainSignal.getStopLoss());
         entity.setTargetPrice(domainSignal.getTargetPrice());
         entity.setQuantity(domainSignal.getQuantity());
+        entity.setStatus(TradeSignalStatus.PENDING);
         return entity;
     }
 

@@ -9,6 +9,7 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -51,7 +52,8 @@ public class YahooMarketDataProvider implements MarketDataProvider {
 
         try {
             List<YahooFinanceApiService.YahooCandleData> yahooCandles =
-                    yahooApiService.fetchDailyCandles(yahooSymbol, from, to);
+//                    yahooApiService.fetchDailyCandles(yahooSymbol, from, to);
+            new ArrayList<>();
 
             if (yahooCandles.isEmpty()) {
                 log.debug("No candles returned from Yahoo Finance for {}", symbol);

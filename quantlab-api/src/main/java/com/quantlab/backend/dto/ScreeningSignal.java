@@ -26,7 +26,7 @@ public class ScreeningSignal {
     @NotBlank(message = "Side is required")
     private String side; // BUY or SELL
 
-    @JsonProperty("entryPrice")
+    @JsonProperty("entry")
     @NotNull(message = "Entry price is required")
     private BigDecimal entryPrice;
 

@@ -20,7 +20,7 @@ public class Candle {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "instrument_id", nullable = false)
     private Instrument instrument;
 

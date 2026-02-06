@@ -50,6 +50,65 @@ export interface Signal {
   strategy?: string | null;
 }
 
+// Ensemble voting types
+export interface EnsembleSignal {
+  ensembleId: string;
+  symbol: string;
+  signalDate: string;
+  side: string;
+  entryPrice: number;
+  stopLoss: number | null;
+  targetPrice: number | null;
+  voteScore: number;
+  totalStrategies: number;
+  confidenceScore: number;
+  strategyVotes: Record<string, string>;
+  rankScore?: number;
+  rMultiple?: number;
+  liquidityScore?: number;
+  volatilityFit?: number;
+}
+
+export interface EnsembleResult {
+  signals: EnsembleSignal[];
+}
+
+export interface EnsembleRequest {
+  strategyCodes: string[];
+  date: string;
+  market: MarketType;
+}
+
+// Capital allocation types
+export interface AllocationPosition {
+  id?: number;
+  symbol: string;
+  quantity: number;
+  capitalUsed: number;
+  riskAmount: number;
+  expectedR: number;
+  allocationPct: number;
+}
+
+export interface CapitalAllocationSnapshot {
+  id?: number;
+  runDate: string;
+  totalCapital: number;
+  deployedCapital: number;
+  freeCash: number;
+  expectedRMultiple: number;
+  positions: AllocationPosition[];
+  createdAt?: string;
+}
+
+export interface AllocationRequest {
+  date: string;
+  totalCapital: number;
+  riskPerTradePct: number;
+  maxOpenTrades: number;
+}
+}
+
 export interface PaperTrade {
   id: number;
   symbol: string;

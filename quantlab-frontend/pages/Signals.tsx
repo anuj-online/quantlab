@@ -107,96 +107,54 @@ const Signals: React.FC<SignalsProps> = ({ runId }) => {
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden max-h-[calc(100vh-300px)] overflow-y-auto">
-        <table className="w-full text-left border-collapse sticky top-0">
+        <table className="w-full text-left border-collapse sticky top-0 min-w-max">
           <thead>
-            <tr className="bg-slate-800/50 text-[10px] uppercase tracking-widest text-slate-500 font-bold border-b border-slate-800">
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'symbol' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('symbol')}
-                title={sortTooltip}
-              >
-                Symbol {getSortIndicator('symbol')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'signalDate' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('signalDate')}
-              >
-                Date {getSortIndicator('signalDate')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'side' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('side')}
-              >
-                Side {getSortIndicator('side')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'entryPrice' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('entryPrice')}
-              >
-                Buy Price {getSortIndicator('entryPrice')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'stopLoss' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('stopLoss')}
-              >
-                Stop Loss {getSortIndicator('stopLoss')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'targetPrice' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('targetPrice')}
-              >
-                Target {getSortIndicator('targetPrice')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'quantity' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('quantity')}
-              >
-                Qty {getSortIndicator('quantity')}
-              </th>
-              <th
-                className={`px-6 py-4 cursor-pointer transition-colors flex items-center gap-1 ${
-                  sortField === 'strategy' ? 'text-slate-300' : 'hover:text-slate-300'
-                }`}
-                onClick={() => handleSort('strategy')}
-              >
-                Strategy {getSortIndicator('strategy')}
-              </th>
+            <tr className="bg-slate-800/50 text-[11px] uppercase tracking-widest text-slate-500 font-bold border-b border-slate-800">
+              {[
+                { field: 'symbol', label: 'Symbol', width: 'w-24' },
+                { field: 'signalDate', label: 'Date', width: 'w-32' },
+                { field: 'side', label: 'Side', width: 'w-20' },
+                { field: 'entryPrice', label: 'Buy Price', width: 'w-24' },
+                { field: 'stopLoss', label: 'Stop Loss', width: 'w-24' },
+                { field: 'targetPrice', label: 'Target', width: 'w-24' },
+                { field: 'quantity', label: 'Qty', width: 'w-16' },
+                { field: 'strategy', label: 'Strategy', width: 'w-32' },
+              ].map(({ field, label, width }) => (
+                <th
+                  key={field}
+                  className={`${width} px-4 py-3 text-left cursor-pointer transition-colors whitespace-nowrap ${
+                    sortField === field ? 'text-slate-300' : 'hover:text-slate-300'
+                  }`}
+                  onClick={() => handleSort(field as SortField)}
+                  title={sortTooltip}
+                >
+                  <div className="flex items-center gap-1">
+                    {label} {getSortIndicator(field as SortField)}
+                  </div>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
             {sortedSignals.map((signal, idx) => (
               <tr key={idx} className="hover:bg-slate-800/30 transition-colors text-sm">
-                <td className="px-6 py-4 font-bold text-slate-200 mono">{signal.symbol}</td>
-                <td className="px-6 py-4 text-slate-400 mono">{signal.signalDate}</td>
-                <td className="px-6 py-4">
+                <td className="w-24 px-4 py-3 font-bold text-slate-200 mono truncate">{signal.symbol}</td>
+                <td className="w-32 px-4 py-3 text-slate-400 mono">{signal.signalDate}</td>
+                <td className="w-20 px-4 py-3">
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${signal.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
                     {signal.side}
                   </span>
                 </td>
-                <td className="px-6 py-4 text-slate-300 mono">{signal.entryPrice.toFixed(2)}</td>
-                <td className="px-6 py-4 text-rose-400/80 mono">{signal.stopLoss !== null ? signal.stopLoss.toFixed(2) : 'N/A'}</td>
-                <td className="px-6 py-4 text-emerald-400/80 mono">{signal.targetPrice !== null ? signal.targetPrice.toFixed(2) : 'N/A'}</td>
-                <td className="px-6 py-4 text-slate-300 mono">{signal.quantity}</td>
-                <td className="px-6 py-4 text-slate-500 text-xs">{signal.strategy}</td>
+                <td className="w-24 px-4 py-3 text-slate-300 mono">{signal.entryPrice.toFixed(2)}</td>
+                <td className="w-24 px-4 py-3 text-rose-400/80 mono">{signal.stopLoss !== null ? signal.stopLoss.toFixed(2) : 'N/A'}</td>
+                <td className="w-24 px-4 py-3 text-emerald-400/80 mono">{signal.targetPrice !== null ? signal.targetPrice.toFixed(2) : 'N/A'}</td>
+                <td className="w-16 px-4 py-3 text-slate-300 mono">{signal.quantity}</td>
+                <td className="w-32 px-4 py-3 text-slate-500 text-xs truncate">{signal.strategy}</td>
               </tr>
             ))}
             {signals.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-6 py-12 text-center text-slate-500 italic">No signals generated for this run.</td>
+                <td colSpan={8} className="px-4 py-12 text-center text-slate-500 italic">No signals generated for this run.</td>
               </tr>
             )}
           </tbody>
