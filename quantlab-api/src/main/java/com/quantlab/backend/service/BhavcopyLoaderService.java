@@ -20,7 +20,13 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Service for loading Bhavcopy CSV files into the database.
@@ -344,17 +350,191 @@ public class BhavcopyLoaderService {
 
     /**
      * Metrics class to track load statistics.
+     * Made public for access by parallel file processing components.
      */
-    private static class BhavcopyLoadMetrics {
-        int totalRowsRead = 0;
-        int equityRowsProcessed = 0;
-        int instrumentsCreated = 0;
-        int candlesInserted = 0;
-        int candlesSkipped = 0;
-        int errors = 0;
-        LocalDate tradingDate;
+    public static class BhavcopyLoadMetrics {
+        public int totalRowsRead = 0;
+        public int equityRowsProcessed = 0;
+        public int instrumentsCreated = 0;
+        public int candlesInserted = 0;
+        public int candlesSkipped = 0;
+        public int errors = 0;
+        public LocalDate tradingDate;
 
-        BhavcopyLoadMetrics() {
+        public BhavcopyLoadMetrics() {
         }
+    }
+
+    // ==================== BATCH PROCESSING METHODS ====================
+    // These methods optimize performance for parallel file processing
+
+    /**
+     * Batch load Bhavcopy file using bulk operations.
+     * More efficient than loadBhavcopyFile for parallel processing.
+     *
+     * @param filePath Path to the Bhavcopy CSV file
+     * @return metrics summarizing the load operation
+     * @throws IOException if file reading fails
+     */
+    @Transactional
+    public BhavcopyLoadMetrics loadBhavcopyFileBatch(Path filePath) throws IOException {
+        log.info("Starting batch Bhavcopy file load: {}", filePath);
+
+        BhavcopyLoadMetrics metrics = new BhavcopyLoadMetrics();
+        List<BhavcopyRow> allRows = new ArrayList<>();
+        Set<String> allSymbols = new java.util.HashSet<>();
+
+        try (BufferedReader reader = Files.newBufferedReader(filePath)) {
+            // Skip header line
+            String headerLine = reader.readLine();
+            if (headerLine == null) {
+                log.warn("Empty file: {}", filePath);
+                return metrics;
+            }
+
+            String line;
+            while ((line = reader.readLine()) != null) {
+                metrics.totalRowsRead++;
+
+                try {
+                    BhavcopyRow row = parseCsvLine(line);
+                    if (row == null) {
+                        continue;
+                    }
+
+                    // Filter: Only process EQ series
+                    if (!"EQ".equals(row.getSeries())) {
+                        continue;
+                    }
+
+                    metrics.equityRowsProcessed++;
+                    allRows.add(row);
+                    allSymbols.add(row.getSymbol());
+
+                    if (metrics.tradingDate == null) {
+                        metrics.tradingDate = row.getDate();
+                    }
+
+                } catch (Exception e) {
+                    log.error("Error parsing line {}: {}", metrics.totalRowsRead, e.getMessage());
+                    metrics.errors++;
+                }
+            }
+        }
+
+        // Batch process: find/create instruments
+        Map<String, Instrument> instrumentMap = batchFindOrCreateInstruments(allSymbols, metrics);
+
+        // Batch check existing candles
+        List<Long> instrumentIds = allRows.stream()
+                .map(r -> instrumentMap.get(r.getSymbol()).getId())
+                .distinct()
+                .toList();
+        List<LocalDate> tradeDates = allRows.stream()
+                .map(BhavcopyRow::getDate)
+                .distinct()
+                .toList();
+
+        Set<Long> existingInstrumentIds = Set.copyOf(
+                candleRepository.findExistingInstrumentIds(instrumentIds, tradeDates)
+        );
+
+        // Batch insert new candles
+        List<Candle> candlesToInsert = new ArrayList<>();
+        for (BhavcopyRow row : allRows) {
+            Instrument instrument = instrumentMap.get(row.getSymbol());
+            Long instrumentId = instrument.getId();
+            LocalDate tradeDate = row.getDate();
+
+            // Simple existence check (could be improved with composite key check)
+            boolean candleExists = existingInstrumentIds.contains(instrumentId);
+
+            if (!candleExists) {
+                Candle candle = createCandle(instrument, row);
+                candlesToInsert.add(candle);
+            } else {
+                metrics.candlesSkipped++;
+            }
+        }
+
+        if (!candlesToInsert.isEmpty()) {
+            List<Candle> saved = candleRepository.saveAll(candlesToInsert);
+            metrics.candlesInserted = saved.size();
+        }
+
+        logLoadSummary(filePath, metrics);
+        return metrics;
+    }
+
+    /**
+     * Batch find or create instruments for the given symbols.
+     * Uses a single bulk query to find existing instruments,
+     * then creates any missing ones using idempotent inserts to handle
+     * race conditions in parallel bhavcopy loading.
+     *
+     * @param symbols set of trading symbols
+     * @param metrics metrics to update with creation count
+     * @return map of symbol to Instrument
+     */
+    private Map<String, Instrument> batchFindOrCreateInstruments(Set<String> symbols, BhavcopyLoadMetrics metrics) {
+        // Bulk query for existing instruments
+        List<String> symbolList = new ArrayList<>(symbols);
+        List<Instrument> existingInstruments = instrumentRepository
+                .findBySymbolInAndMarket(symbolList, MarketType.INDIA);
+
+        Map<String, Instrument> instrumentMap = existingInstruments.stream()
+                .collect(Collectors.toMap(Instrument::getSymbol, i -> i));
+
+        // Find missing symbols and insert them idempotently
+        int createdCount = 0;
+        for (String symbol : symbols) {
+            if (!instrumentMap.containsKey(symbol)) {
+                // Use idempotent insert - handles race condition from parallel threads
+                Optional<Instrument> inserted = instrumentRepository.insertIfNotExists(
+                        symbol,
+                        symbol,
+                        MarketType.INDIA.name()
+                );
+
+                if (inserted.isPresent()) {
+                    instrumentMap.put(symbol, inserted.get());
+                    createdCount++;
+                } else {
+                    // Insert failed due to conflict (another thread inserted it)
+                    // Re-query to get the existing instrument
+                    Instrument existing = instrumentRepository.findBySymbolAndMarket(symbol, MarketType.INDIA);
+                    if (existing != null) {
+                        instrumentMap.put(symbol, existing);
+                    }
+                }
+            }
+        }
+
+        metrics.instrumentsCreated = createdCount;
+        return instrumentMap;
+    }
+
+    /**
+     * Aggregate metrics from multiple parallel file loads.
+     *
+     * @param metricsList list of metrics from parallel loads
+     * @return aggregated metrics
+     */
+    public static BhavcopyLoadMetrics aggregateMetrics(List<BhavcopyLoadMetrics> metricsList) {
+        BhavcopyLoadMetrics aggregated = new BhavcopyLoadMetrics();
+
+        for (BhavcopyLoadMetrics m : metricsList) {
+            aggregated.totalRowsRead += m.totalRowsRead;
+            aggregated.equityRowsProcessed += m.equityRowsProcessed;
+            aggregated.instrumentsCreated += m.instrumentsCreated;
+            aggregated.candlesInserted += m.candlesInserted;
+            aggregated.candlesSkipped += m.candlesSkipped;
+            aggregated.errors += m.errors;
+            if (m.tradingDate != null && (aggregated.tradingDate == null || m.tradingDate.isAfter(aggregated.tradingDate))) {
+                aggregated.tradingDate = m.tradingDate;
+            }
+        }
+
+        return aggregated;
     }
 }

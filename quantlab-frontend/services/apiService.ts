@@ -3,7 +3,8 @@ import {
   Instrument, Strategy, StrategyRunRequest, StrategyRunResponse,
   Signal, PaperTrade, AnalyticsSummary, EquityCurvePoint, MarketType,
   ScreeningRequest, ScreeningResult, StrategyComparisonRequest,
-  StrategyComparisonResponse, StrategyMetrics
+  StrategyComparisonResponse, StrategyMetrics, EnsembleRequest, EnsembleResult,
+  AllocationRequest, CapitalAllocationSnapshot
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -66,6 +67,16 @@ export const apiService = {
     return handleResponse<PaperTrade[]>(response);
   },
 
+  async getActiveTrades(runId: number): Promise<PaperTrade[]> {
+    const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/active-trades`);
+    return handleResponse<PaperTrade[]>(response);
+  },
+
+  async getProfitPositions(runId: number): Promise<PaperTrade[]> {
+    const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/profit-positions`);
+    return handleResponse<PaperTrade[]>(response);
+  },
+
   async getAnalytics(runId: number): Promise<AnalyticsSummary> {
     const response = await fetch(`${BASE_URL}/strategy-runs/${runId}/analytics`);
     return handleResponse<AnalyticsSummary>(response);
@@ -112,5 +123,43 @@ export const apiService = {
     });
     const response = await fetch(`${BASE_URL}/strategies/${strategyCode}/metrics?${params}`);
     return handleResponse<StrategyMetrics>(response);
+  },
+
+  // Ensemble screening
+  async runEnsembleScreening(strategyCodes: string[], date: string): Promise<EnsembleResult> {
+    const payload: EnsembleRequest = {
+      strategyCodes,
+      date,
+      market: 'INDIA' // Default to INDIA market
+    };
+    const response = await fetch(`${BASE_URL}/screening/ensemble`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse<EnsembleResult>(response);
+  },
+
+  // Capital allocation
+  async simulateCapitalAllocation(payload: AllocationRequest): Promise<CapitalAllocationSnapshot> {
+    const response = await fetch(`${BASE_URL}/capital-allocation/simulate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse<CapitalAllocationSnapshot>(response);
+  },
+
+  async getCapitalAllocationHistory(startDate: string, endDate: string): Promise<CapitalAllocationSnapshot[]> {
+    const params = new URLSearchParams({
+      startDate,
+      endDate
+    });
+    const response = await fetch(`${BASE_URL}/capital-allocation/history?${params}`);
+    return handleResponse<CapitalAllocationSnapshot[]>(response);
   }
 };

@@ -1,6 +1,7 @@
 package com.quantlab.backend.repository;
 
 import com.quantlab.backend.entity.PaperTrade;
+import com.quantlab.backend.entity.PaperTradeStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -115,4 +116,39 @@ public interface PaperTradeRepository extends JpaRepository<PaperTrade, Long> {
      * @param strategyRunId the strategy run ID
      */
     void deleteByStrategyRunId(Long strategyRunId);
+
+    /**
+     * Find all paper trades for a specific strategy run and status.
+     *
+     * @param strategyRunId the strategy run ID
+     * @param status the status
+     * @return list of paper trades
+     */
+    List<PaperTrade> findByStrategyRunIdAndStatus(Long strategyRunId, PaperTradeStatus status);
+
+    /**
+     * Find all paper trades with a specific status.
+     *
+     * @param status the status
+     * @return list of paper trades
+     */
+    List<PaperTrade> findByStatus(PaperTradeStatus status);
+
+    /**
+     * Find all paper trades for a specific strategy run and status, ordered by entry date.
+     *
+     * @param strategyRunId the strategy run ID
+     * @param status the status
+     * @return list of paper trades
+     */
+    List<PaperTrade> findByStrategyRunIdAndStatusOrderByEntryDateAsc(Long strategyRunId, PaperTradeStatus status);
+
+    /**
+     * Find all paper trades for a specific strategy code.
+     *
+     * @param strategyCode the strategy code
+     * @return list of paper trades
+     */
+    @Query("SELECT pt FROM PaperTrade pt JOIN pt.strategyRun sr WHERE sr.strategy.code = :strategyCode")
+    List<PaperTrade> findByStrategyCode(String strategyCode);
 }

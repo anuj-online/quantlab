@@ -1,6 +1,7 @@
 package com.quantlab.backend.repository;
 
 import com.quantlab.backend.entity.TradeSignal;
+import com.quantlab.backend.entity.TradeSignalStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -69,4 +70,49 @@ public interface TradeSignalRepository extends JpaRepository<TradeSignal, Long> 
      * @param strategyRunId the strategy run ID
      */
     void deleteByStrategyRunId(Long strategyRunId);
+
+    /**
+     * Find all trade signals for a specific strategy run and status.
+     *
+     * @param strategyRunId the strategy run ID
+     * @param status the status
+     * @return list of trade signals
+     */
+    List<TradeSignal> findByStrategyRunIdAndStatus(Long strategyRunId, TradeSignalStatus status);
+
+    /**
+     * Find all trade signals with a specific status.
+     *
+     * @param status the status
+     * @return list of trade signals
+     */
+    List<TradeSignal> findByStatus(TradeSignalStatus status);
+
+    /**
+     * Find all pending signals for a specific date.
+     *
+     * @param status the status
+     * @param signalDate the signal date
+     * @return list of trade signals
+     */
+    List<TradeSignal> findByStatusAndSignalDate(TradeSignalStatus status, LocalDate signalDate);
+
+    /**
+     * Find top N pending signals by rank score for a given date.
+     *
+     * @param signalDate the signal date
+     * @param limit the maximum number of signals to return
+     * @return list of trade signals
+     */
+    @Query("SELECT ts FROM TradeSignal ts WHERE ts.status = 'PENDING' AND ts.signalDate = :signalDate ORDER BY ts.rankScore DESC")
+    List<TradeSignal> findTopPendingSignalsByRankScore(LocalDate signalDate, int limit);
+
+    /**
+     * Find all trade signals for a specific strategy code.
+     *
+     * @param strategyCode the strategy code
+     * @return list of trade signals
+     */
+    @Query("SELECT ts FROM TradeSignal ts JOIN ts.strategyRun sr WHERE sr.strategy.code = :strategyCode")
+    List<TradeSignal> findByStrategyCode(String strategyCode);
 }

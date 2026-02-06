@@ -1,9 +1,13 @@
 package com.quantlab.backend.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * TradeSignal entity representing generated trading signals
@@ -41,10 +45,57 @@ public class TradeSignal {
     @Column(name = "target_price", precision = 19, scale = 4)
     private BigDecimal targetPrice;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private TradeSignalStatus status;
+
     @Column(nullable = false)
     private Integer quantity;
 
+    // Ensemble voting fields
+    @Column(name = "ensemble_id")
+    private UUID ensembleId;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_votes", columnDefinition = "jsonb")
+    private Map<String, String> strategyVotes;
+
+    @Column(name = "vote_score")
+    private Integer voteScore;
+
+    @Column(name = "confidence_score")
+    private Double confidenceScore;
+
+    // Ranking fields
+    @Column(name = "rank_score")
+    private Double rankScore;
+
+    @Column(name = "r_multiple")
+    private Double rMultiple;
+
+    @Column(name = "liquidity_score")
+    private Double liquidityScore;
+
+    @Column(name = "volatility_fit")
+    private Double volatilityFit;
+
+    @Column(name = "strategy_win_rate")
+    private Double strategyWinRate;
+
     public TradeSignal() {
+    }
+
+    public TradeSignal(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate signalDate, Side side, BigDecimal entryPrice, BigDecimal stopLoss, BigDecimal targetPrice, Integer quantity, TradeSignalStatus status) {
+        this.id = id;
+        this.strategyRun = strategyRun;
+        this.instrument = instrument;
+        this.signalDate = signalDate;
+        this.side = side;
+        this.entryPrice = entryPrice;
+        this.stopLoss = stopLoss;
+        this.targetPrice = targetPrice;
+        this.quantity = quantity;
+        this.status = status;
     }
 
     public TradeSignal(Long id, StrategyRun strategyRun, Instrument instrument, LocalDate signalDate, Side side, BigDecimal entryPrice, BigDecimal stopLoss, BigDecimal targetPrice, Integer quantity) {
@@ -57,6 +108,7 @@ public class TradeSignal {
         this.stopLoss = stopLoss;
         this.targetPrice = targetPrice;
         this.quantity = quantity;
+        this.status = TradeSignalStatus.PENDING;
     }
 
     public Long getId() {
@@ -129,6 +181,86 @@ public class TradeSignal {
 
     public void setQuantity(Integer quantity) {
         this.quantity = quantity;
+    }
+
+    public TradeSignalStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(TradeSignalStatus status) {
+        this.status = status;
+    }
+
+    public UUID getEnsembleId() {
+        return ensembleId;
+    }
+
+    public void setEnsembleId(UUID ensembleId) {
+        this.ensembleId = ensembleId;
+    }
+
+    public Map<String, String> getStrategyVotes() {
+        return strategyVotes;
+    }
+
+    public void setStrategyVotes(Map<String, String> strategyVotes) {
+        this.strategyVotes = strategyVotes;
+    }
+
+    public Integer getVoteScore() {
+        return voteScore;
+    }
+
+    public void setVoteScore(Integer voteScore) {
+        this.voteScore = voteScore;
+    }
+
+    public Double getConfidenceScore() {
+        return confidenceScore;
+    }
+
+    public void setConfidenceScore(Double confidenceScore) {
+        this.confidenceScore = confidenceScore;
+    }
+
+    public Double getRankScore() {
+        return rankScore;
+    }
+
+    public void setRankScore(Double rankScore) {
+        this.rankScore = rankScore;
+    }
+
+    public Double getRMultiple() {
+        return rMultiple;
+    }
+
+    public void setRMultiple(Double rMultiple) {
+        this.rMultiple = rMultiple;
+    }
+
+    public Double getLiquidityScore() {
+        return liquidityScore;
+    }
+
+    public void setLiquidityScore(Double liquidityScore) {
+        this.liquidityScore = liquidityScore;
+    }
+
+    public Double getVolatilityFit() {
+        return volatilityFit;
+    }
+
+    public void setVolatilityFit(Double volatilityFit) {
+        this.volatilityFit = volatilityFit;
+    }
+
+    public Double getStrategyWinRate() {
+        return strategyWinRate;
+    }
+
+    public void setStrategyWinRate(Double strategyWinRate) {
+        this.strategyWinRate = strategyWinRate;
     }
 
     @Override

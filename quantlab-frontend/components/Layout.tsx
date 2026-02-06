@@ -5,10 +5,13 @@ import { Link, useLocation } from 'react-router-dom';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
   { path: '/configure', label: 'Strategy Config', icon: '⚙️' },
-  { path: '/signals', label: 'Signals', icon: '📡' },
-  { path: '/trades', label: 'Paper Trades', icon: '📝' },
-  { path: '/screening', label: 'Screening', icon: '🔍' },
-  { path: '/compare', label: 'Compare', icon: '📈' },
+  { path: '/signals', label: 'Screening', icon: '🔍' },
+  { path: '/capital-allocation', label: 'Capital Simulator', icon: '💰' },
+  { path: '/active-trades', label: 'Active Trades', icon: '💼' },
+  { path: '/trades', label: 'Closed Trades', icon: '📝' },
+  { path: '/compare', label: 'Strategy Performance', icon: '📈' },
+  { path: '/compare', label: 'Strategy Performance', icon: '📈' },
+  { path: '/sd', label: 'SD', icon: '📈' },
 ];
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {

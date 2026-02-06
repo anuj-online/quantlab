@@ -222,6 +222,71 @@ public class StrategySeeder {
             skippedCount++;
         }
 
+        // Seed RSI_MEAN_REVERSION strategy
+        if (seedStrategyIfNotExists(
+                "RSI_MEAN_REVERSION",
+                "RSI Mean Reversion",
+                "Buy on RSI crossing below oversold threshold (30) with bullish candle and volume confirmation",
+                true,
+                35
+        )) {
+            createdCount++;
+        } else {
+            skippedCount++;
+        }
+
+        // Seed MORNING_STAR strategy
+        if (seedStrategyIfNotExists(
+                "MORNING_STAR",
+                "Morning Star Reversal",
+                "Three-candle bullish reversal: large bearish candle + small doji + strong bullish candle",
+                true,
+                3
+        )) {
+            createdCount++;
+        } else {
+            skippedCount++;
+        }
+
+        // Seed ATR_BREAKOUT strategy
+        if (seedStrategyIfNotExists(
+                "ATR_BREAKOUT",
+                "ATR Volatility Breakout",
+                "Buy when today's range exceeds 1.5x ATR with volume confirmation",
+                true,
+                35
+        )) {
+            createdCount++;
+        } else {
+            skippedCount++;
+        }
+
+        // Seed RSI_DIVERGENCE strategy
+        if (seedStrategyIfNotExists(
+                "RSI_DIVERGENCE",
+                "RSI Divergence Detector",
+                "Identifies hidden and regular divergences between price and RSI for leading reversal signals",
+                true,
+                30
+        )) {
+            createdCount++;
+        } else {
+            skippedCount++;
+        }
+
+        // Seed DOJI_REVERSAL strategy
+        if (seedStrategyIfNotExists(
+                "DOJI_REVERSAL",
+                "Doji Candlestick Reversal",
+                "Identifies doji patterns (Gravestone, Dragonfly, Standard) with confirmation candles",
+                true,
+                2
+        )) {
+            createdCount++;
+        } else {
+            skippedCount++;
+        }
+
         log.info("Strategy seeding completed. Created: {}, Skipped: {}", createdCount, skippedCount);
     }
 

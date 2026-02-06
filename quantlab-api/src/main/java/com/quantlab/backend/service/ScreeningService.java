@@ -21,6 +21,7 @@ import com.quantlab.backend.strategy.StrategyRegistry;
 import com.quantlab.backend.strategy.StrategyResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -51,6 +54,14 @@ import java.util.stream.Collectors;
  *   <li>Results are grouped by strategy for easy comparison</li>
  * </ul>
  * </p>
+ * <p>
+ * <b>Parallel Processing:</b> This service uses a dedicated thread pool for maximum performance:
+ * <ul>
+ *   <li>Strategies are processed in parallel (multiple strategies run simultaneously)</li>
+ *   <li>Instruments within each strategy are processed in parallel</li>
+ *   <li>Thread pool is bounded to prevent resource exhaustion</li>
+ * </ul>
+ * </p>
  */
 @Service
 @Transactional
@@ -63,18 +74,21 @@ public class ScreeningService {
     private final InstrumentRepository instrumentRepository;
     private final CompositeMarketDataProvider compositeMarketDataProvider;
     private final StrategyRegistry strategyRegistry;
+    private final Executor screeningTaskExecutor;
 
     public ScreeningService(
             ScreeningResultsRepository screeningResultsRepository,
             StrategyRepository strategyRepository,
             InstrumentRepository instrumentRepository,
             CompositeMarketDataProvider compositeMarketDataProvider,
-            StrategyRegistry strategyRegistry) {
+            StrategyRegistry strategyRegistry,
+            @Qualifier("screeningTaskExecutor") Executor screeningTaskExecutor) {
         this.screeningResultsRepository = screeningResultsRepository;
         this.strategyRepository = strategyRepository;
         this.instrumentRepository = instrumentRepository;
         this.compositeMarketDataProvider = compositeMarketDataProvider;
         this.strategyRegistry = strategyRegistry;
+        this.screeningTaskExecutor = screeningTaskExecutor;
     }
 
     /**
@@ -82,10 +96,14 @@ public class ScreeningService {
      * <p>
      * This method:
      * 1. Validates the request (strategies exist, date has data)
-     * 2. For each strategy, evaluates all active instruments
+     * 2. For each strategy, evaluates all active instruments (in parallel)
      * 3. Collects actionable signals (isActionable = true)
      * 4. Saves results to screening_results table
      * 5. Returns signals grouped by strategy
+     * </p>
+     * <p>
+     * <b>Performance:</b> Strategies are processed in parallel using dedicated thread pool.
+     * Each strategy also processes instruments in parallel for maximum throughput.
      * </p>
      *
      * @param request the screening request with strategy codes and date
@@ -93,8 +111,10 @@ public class ScreeningService {
      * @throws IllegalArgumentException if request is invalid
      */
     public ScreeningResponse runScreening(ScreeningRequest request) {
-        log.info("Running screening for strategies: {} on date: {}",
-                request.getStrategyCodes(), request.getDate());
+        log.info("Running parallel screening for strategies: {} on date: {}, market: {}",
+                request.getStrategyCodes(), request.getDate(), request.getMarket());
+
+        long startTime = System.currentTimeMillis();
 
         // Validate request
         validateScreeningRequest(request);
@@ -104,44 +124,59 @@ public class ScreeningService {
 
         // Get instruments to screen
         List<Instrument> instruments = getInstrumentsForScreening(market);
-        log.info("Screening {} instruments", instruments.size());
+        log.info("Screening {} instruments across {} strategies",
+                instruments.size(), request.getStrategyCodes().size());
 
-        // Map to store signals by strategy
+        // Thread-safe map to store signals by strategy
         Map<String, List<ScreeningSignal>> signalsByStrategy = new HashMap<>();
-        int totalSignals = 0;
 
-        // Process each strategy
-        for (String strategyCode : request.getStrategyCodes()) {
-            log.debug("Processing strategy: {}", strategyCode);
+        // Create parallel tasks for each strategy
+        List<CompletableFuture<Void>> strategyFutures = request.getStrategyCodes().stream()
+                .map(strategyCode -> CompletableFuture.runAsync(() -> {
+                    log.debug("[Thread: {}] Processing strategy: {}",
+                            Thread.currentThread().getName(), strategyCode);
 
-            // Validate strategy exists
-            if (!strategyRepository.existsByCode(strategyCode)) {
-                log.warn("Strategy not found: {}, skipping", strategyCode);
-                continue;
-            }
+                    // Validate strategy exists
+                    if (!strategyRepository.existsByCode(strategyCode)) {
+                        log.warn("Strategy code '{}' not found in database, skipping", strategyCode);
+                        return;
+                    }
 
-            // Get strategy implementation
-            Strategy strategyImpl = strategyRegistry.getStrategy(strategyCode.toLowerCase());
+                    log.debug("Fetching strategy implementation for code: '{}'", strategyCode);
+                    // Get strategy implementation
+                    Strategy strategyImpl = strategyRegistry.getStrategy(strategyCode.toLowerCase());
 
-            // Screen this strategy
-            List<ScreeningSignal> strategySignals = screenStrategy(
-                    strategyImpl,
-                    strategyCode,
-                    instruments,
-                    request.getDate()
-            );
+                    log.debug("Running {} strategy on {} instruments", strategyCode, instruments.size());
 
-            if (!strategySignals.isEmpty()) {
-                signalsByStrategy.put(strategyCode, strategySignals);
-                totalSignals += strategySignals.size();
+                    // Screen this strategy (parallel instrument processing)
+                    List<ScreeningSignal> strategySignals = screenStrategy(
+                            strategyImpl,
+                            strategyCode,
+                            instruments,
+                            request.getDate()
+                    );
 
-                // Save to database
-                saveScreeningResults(strategyCode, request.getDate(), strategySignals);
-            }
+                    if (!strategySignals.isEmpty()) {
+                        // Thread-safe update of shared map
+                        synchronized (signalsByStrategy) {
+                            signalsByStrategy.put(strategyCode, strategySignals);
+                        }
 
-            log.info("Strategy {} generated {} actionable signals",
-                    strategyCode, strategySignals.size());
-        }
+                        // Save to database
+                        saveScreeningResults(strategyCode, request.getDate(), strategySignals);
+                    }
+
+                    log.info("[Thread: {}] Strategy {} generated {} actionable signals",
+                            Thread.currentThread().getName(), strategyCode, strategySignals.size());
+
+                }, screeningTaskExecutor))
+                .toList();
+
+        // Wait for all strategy screenings to complete
+        CompletableFuture.allOf(strategyFutures.toArray(new CompletableFuture[0])).join();
+
+        // Calculate total signals
+        int totalSignals = signalsByStrategy.values().stream().mapToInt(List::size).sum();
 
         // Build response
         ScreeningResponse response = new ScreeningResponse();
@@ -151,7 +186,9 @@ public class ScreeningService {
         response.setTotalSignals(totalSignals);
         response.setTimestamp(LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
 
-        log.info("Screening completed. Total signals: {}", totalSignals);
+        long duration = System.currentTimeMillis() - startTime;
+        log.info("Parallel screening completed in {} ms. Total signals: {}, Signals by strategy: {}",
+                duration, totalSignals, signalsByStrategy);
         return response;
     }
 
@@ -206,8 +243,18 @@ public class ScreeningService {
     }
 
     /**
-     * Screen a single strategy across all instruments.
+     * Screen a single strategy across all instruments using parallel processing.
      * Returns actionable signals only (BUY/SELL).
+     * <p>
+     * <b>Performance:</b> Instruments are screened in parallel using the dedicated thread pool.
+     * Results are aggregated into a thread-safe list.
+     * </p>
+     *
+     * @param strategyImpl the strategy implementation
+     * @param strategyCode the strategy code for logging
+     * @param instruments list of instruments to screen
+     * @param screenDate the date to screen for
+     * @return list of actionable screening signals
      */
     private List<ScreeningSignal> screenStrategy(
             Strategy strategyImpl,
@@ -215,51 +262,62 @@ public class ScreeningService {
             List<Instrument> instruments,
             LocalDate screenDate) {
 
+        // Thread-safe list for collecting signals from parallel execution
         List<ScreeningSignal> actionableSignals = new ArrayList<>();
 
-        for (Instrument instrument : instruments) {
-            try {
-                // Load historical candles up to the screen date
-                // Need sufficient history for strategy indicators
-                LocalDate startDate = calculateHistoricalStartDate(strategyImpl.getMinCandlesRequired(), screenDate);
+        // Create parallel tasks for each instrument
+        List<CompletableFuture<Void>> instrumentFutures = instruments.stream()
+                .map(instrument -> CompletableFuture.runAsync(() -> {
+                    try {
+                        // Load historical candles up to the screen date
+                        // Need sufficient history for strategy indicators
+                        LocalDate startDate = calculateHistoricalStartDate(
+                                strategyImpl.getMinCandlesRequired(), screenDate);
 
-                // Use composite market data provider to get candles from DB + Yahoo Finance for gaps
-                List<com.quantlab.backend.entity.Candle> candles = compositeMarketDataProvider
-                        .getDailyCandlesForScreening(instrument.getSymbol(), startDate, screenDate);
+                        // Use composite market data provider to get candles from DB + Yahoo Finance for gaps
+                        List<com.quantlab.backend.entity.Candle> candles = compositeMarketDataProvider
+                                .getDailyCandlesForScreening(instrument.getSymbol(), startDate, screenDate);
 
-                if (candles.isEmpty()) {
-                    log.debug("No candles found for {} up to {}", instrument.getSymbol(), screenDate);
-                    continue;
-                }
-
-                if (candles.size() < strategyImpl.getMinCandlesRequired()) {
-                    log.debug("Insufficient candles for {}: {} (required: {})",
-                            instrument.getSymbol(), candles.size(), strategyImpl.getMinCandlesRequired());
-                    continue;
-                }
-
-                // Generate signals using the strategy
-                StrategyParams params = new StrategyParams(new HashMap<>()); // Use default params
-                List<TradeSignal> signals = strategyImpl.generateSignals(candles, params);
-
-                // Filter for actionable signals on the screen date
-                for (TradeSignal signal : signals) {
-                    // Only include signals that match the screen date
-                    if (signal.getSignalDate().equals(screenDate)) {
-                        // Check if signal is actionable (BUY or SELL)
-                        if (isActionableSignal(signal)) {
-                            ScreeningSignal screeningSignal = convertToScreeningSignal(
-                                    signal, strategyCode);
-                            actionableSignals.add(screeningSignal);
+                        if (candles.isEmpty()) {
+                            log.debug("No candles found for {} between {} and {}", instrument.getSymbol(), startDate, screenDate);
+                            return;
                         }
-                    }
-                }
 
-            } catch (Exception e) {
-                log.error("Error screening instrument {} with strategy {}: {}",
-                        instrument.getSymbol(), strategyCode, e.getMessage(), e);
-            }
-        }
+                        if (candles.size() < strategyImpl.getMinCandlesRequired()) {
+                            log.debug("Insufficient candles for {}: {} (required: {})",
+                                    instrument.getSymbol(), candles.size(), strategyImpl.getMinCandlesRequired());
+                            return;
+                        }
+
+                        // Generate signals using the strategy
+                        StrategyParams params = new StrategyParams(new HashMap<>()); // Use default params
+                        List<TradeSignal> signals = strategyImpl.generateSignals(candles, params);
+
+                        // Filter for actionable signals on the screen date
+                        for (TradeSignal signal : signals) {
+                            // Only include signals that match the screen date
+                            if (signal.getSignalDate().equals(screenDate)) {
+                                // Check if signal is actionable (BUY or SELL)
+                                if (isActionableSignal(signal)) {
+                                    ScreeningSignal screeningSignal = convertToScreeningSignal(
+                                            signal, strategyCode);
+                                    // Thread-safe add to shared list
+                                    synchronized (actionableSignals) {
+                                        actionableSignals.add(screeningSignal);
+                                    }
+                                }
+                            }
+                        }
+
+                    } catch (Exception e) {
+                        log.error("Error screening instrument {} with strategy {}: {}",
+                                instrument.getSymbol(), strategyCode, e.getMessage(), e);
+                    }
+                }, screeningTaskExecutor))
+                .toList();
+
+        // Wait for all instrument screenings to complete
+        CompletableFuture.allOf(instrumentFutures.toArray(new CompletableFuture[0])).join();
 
         return actionableSignals;
     }

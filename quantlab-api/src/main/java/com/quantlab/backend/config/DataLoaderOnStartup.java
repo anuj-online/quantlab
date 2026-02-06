@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -14,7 +16,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Stream;
 
 /**
@@ -47,18 +53,26 @@ public class DataLoaderOnStartup {
     private String bhavcopyFileDir;
 
     @Autowired
-    public DataLoaderOnStartup(BhavcopyLoaderService bhavcopyLoaderService) {
+    public DataLoaderOnStartup(BhavcopyLoaderService bhavcopyLoaderService,
+                               Executor bhavcopyTaskExecutor) {
         this.bhavcopyLoaderService = bhavcopyLoaderService;
+        this.bhavcopyTaskExecutor = (ThreadPoolTaskExecutor) bhavcopyTaskExecutor;
     }
 
     /**
+     * Task executor for parallel file processing.
+     * Injected from AsyncConfig.bhavcopyTaskExecutor bean.
+     */
+    private final ThreadPoolTaskExecutor bhavcopyTaskExecutor;
+
+    /**
      * Triggered when the Spring Boot application is fully ready.
-     * Loads all Bhavcopy CSV files from the configured directory.
+     * Loads all Bhavcopy CSV files from the configured directory in parallel.
      */
 //    @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         log.info("Application ready. Starting Bhavcopy data loading...");
-        loadAllBhavcopyFiles();
+        loadAllBhavcopyFilesParallel();
     }
 
     /**
@@ -94,6 +108,93 @@ public class DataLoaderOnStartup {
     }
 
     /**
+     * Load all Bhavcopy CSV files in parallel using the configured thread pool.
+     * Files are processed in chronological order based on the date in the filename.
+     * Multiple files are processed concurrently while respecting database connection limits.
+     *
+     * Uses batch insert operations for improved performance.
+     *
+     * This method is public so it can be called from scheduled tasks in the future.
+     */
+    public void loadAllBhavcopyFilesParallel() {
+        Path dirPath = Paths.get(bhavcopyFileDir);
+
+        if (!Files.exists(dirPath)) {
+            log.error("Bhavcopy directory does not exist: {}", bhavcopyFileDir);
+            return;
+        }
+
+        if (!Files.isDirectory(dirPath)) {
+            log.error("Bhavcopy path is not a directory: {}", bhavcopyFileDir);
+            return;
+        }
+
+        log.info("Scanning directory for Bhavcopy files (parallel mode): {}", bhavcopyFileDir);
+
+        List<Path> bhavcopyFiles;
+        try (Stream<Path> files = Files.list(dirPath)) {
+            bhavcopyFiles = files.filter(Files::isRegularFile)
+                    .filter(this::isBhavcopyFile)
+                    .sorted(this::compareByFileDate)
+                    .toList();
+
+        } catch (IOException e) {
+            log.error("Error listing Bhavcopy files", e);
+            return;
+        }
+
+        if (bhavcopyFiles.isEmpty()) {
+            log.info("No Bhavcopy files found");
+            return;
+        }
+
+        log.info("Found {} Bhavcopy files. Processing in parallel...", bhavcopyFiles.size());
+        long startTime = System.currentTimeMillis();
+
+        // Submit all files for parallel processing
+        List<CompletableFuture<BhavcopyLoaderService.BhavcopyLoadMetrics>> futures = new ArrayList<>();
+        for (Path file : bhavcopyFiles) {
+            CompletableFuture<BhavcopyLoaderService.BhavcopyLoadMetrics> future = CompletableFuture.supplyAsync(
+                    () -> loadFileSafelyWithMetrics(file),
+                    bhavcopyTaskExecutor
+            );
+            futures.add(future);
+        }
+
+        // Wait for all tasks to complete and aggregate results
+        CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+
+        try {
+            allOf.join(); // Wait for completion
+
+            List<BhavcopyLoaderService.BhavcopyLoadMetrics> metricsList = futures.stream()
+                    .map(CompletableFuture::join)
+                    .toList();
+
+            BhavcopyLoaderService.BhavcopyLoadMetrics aggregated = BhavcopyLoaderService.aggregateMetrics(metricsList);
+
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("========================================");
+            log.info("Parallel Bhavcopy Load Complete");
+            log.info("========================================");
+            log.info("Total Files Processed: {}", bhavcopyFiles.size());
+            log.info("Total Rows Read: {}", aggregated.totalRowsRead);
+            log.info("Total EQ Rows Processed: {}", aggregated.equityRowsProcessed);
+            log.info("Total Instruments Created: {}", aggregated.instrumentsCreated);
+            log.info("Total Candles Inserted: {}", aggregated.candlesInserted);
+            log.info("Total Candles Skipped: {}", aggregated.candlesSkipped);
+            if (aggregated.errors > 0) {
+                log.warn("Total Errors: {}", aggregated.errors);
+            }
+            log.info("Total Duration: {} ms", duration);
+            log.info("========================================");
+
+        } catch (Exception e) {
+            log.error("Error during parallel Bhavcopy loading", e);
+        }
+    }
+
+    /**
      * Load a single Bhavcopy file safely with error handling.
      * Can be called directly to load a specific file.
      *
@@ -107,6 +208,32 @@ public class DataLoaderOnStartup {
 
         } catch (IOException e) {
             log.error("Failed to load file: {}", filePath.getFileName(), e);
+        }
+    }
+
+    /**
+     * Load a single Bhavcopy file safely with error handling and return metrics.
+     * Uses batch insert operations for improved performance.
+     * Used by parallel file processing.
+     *
+     * @param filePath Path to the Bhavcopy CSV file
+     * @return metrics summarizing the load operation (empty metrics on error)
+     */
+    private BhavcopyLoaderService.BhavcopyLoadMetrics loadFileSafelyWithMetrics(Path filePath) {
+        try {
+            log.info("[Thread: {}] Loading file: {}", Thread.currentThread().getName(), filePath.getFileName());
+            BhavcopyLoaderService.BhavcopyLoadMetrics metrics = bhavcopyLoaderService.loadBhavcopyFileBatch(filePath);
+            log.info("[Thread: {}] Successfully loaded: {} (inserted: {}, skipped: {})",
+                    Thread.currentThread().getName(), filePath.getFileName(),
+                    metrics.candlesInserted, metrics.candlesSkipped);
+            return metrics;
+
+        } catch (IOException e) {
+            log.error("[Thread: {}] Failed to load file: {}",
+                    Thread.currentThread().getName(), filePath.getFileName(), e);
+            BhavcopyLoaderService.BhavcopyLoadMetrics errorMetrics = new BhavcopyLoaderService.BhavcopyLoadMetrics();
+            errorMetrics.errors = 1;
+            return errorMetrics;
         }
     }
 

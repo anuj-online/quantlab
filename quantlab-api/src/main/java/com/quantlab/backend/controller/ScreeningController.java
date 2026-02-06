@@ -1,7 +1,7 @@
 package com.quantlab.backend.controller;
 
-import com.quantlab.backend.dto.ScreeningRequest;
-import com.quantlab.backend.dto.ScreeningResponse;
+import com.quantlab.backend.dto.*;
+import com.quantlab.backend.service.EnsembleVotingService;
 import com.quantlab.backend.service.ScreeningService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -39,14 +39,18 @@ public class ScreeningController {
     private static final Logger log = LoggerFactory.getLogger(ScreeningController.class);
 
     private final ScreeningService screeningService;
+    private final EnsembleVotingService ensembleVotingService;
 
     /**
      * Constructor-based dependency injection.
      *
      * @param screeningService the screening service
+     * @param ensembleVotingService the ensemble voting service
      */
-    public ScreeningController(ScreeningService screeningService) {
+    public ScreeningController(ScreeningService screeningService,
+                              EnsembleVotingService ensembleVotingService) {
         this.screeningService = screeningService;
+        this.ensembleVotingService = ensembleVotingService;
     }
 
     /**
@@ -234,6 +238,35 @@ public class ScreeningController {
 
         } catch (Exception e) {
             log.error("Error fetching strategy screening: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Run ensemble screening with multi-strategy consensus voting.
+     * <p>
+     * POST /api/v1/screening/ensemble
+     * </p>
+     * <p>
+     * This endpoint combines signals from multiple strategies and applies
+     * voting logic to generate high-confidence trading signals.
+     * </p>
+     *
+     * @param request the ensemble screening request
+     * @return ensemble response with consensus signals
+     */
+    @PostMapping("/ensemble")
+    public ResponseEntity<EnsembleResult> runEnsembleScreening(@Valid @RequestBody EnsembleRequest request) {
+        log.info("Received ensemble screening request: {}", request);
+
+        try {
+            EnsembleResult result = ensembleVotingService.generateEnsembleSignals(request);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid ensemble screening request: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } catch (Exception e) {
+            log.error("Error running ensemble screening: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }

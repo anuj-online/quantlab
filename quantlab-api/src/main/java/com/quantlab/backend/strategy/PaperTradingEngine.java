@@ -3,6 +3,7 @@ package com.quantlab.backend.strategy;
 import com.quantlab.backend.entity.Candle;
 import com.quantlab.backend.entity.Instrument;
 import com.quantlab.backend.entity.PaperTrade;
+import com.quantlab.backend.entity.PaperTradeStatus;
 import com.quantlab.backend.entity.StrategyRun;
 import com.quantlab.backend.entity.TradeSignal;
 import com.quantlab.backend.repository.PaperTradeRepository;
@@ -180,6 +181,8 @@ public class PaperTradingEngine {
         trade.setQuantity(signal.getQuantity());
         trade.setPnl(pnl);
         trade.setPnlPct(pnlPct);
+        trade.setStatus(PaperTradeStatus.CLOSED);
+        trade.setExitReason(com.quantlab.backend.entity.ExitReason.STOP_LOSS);
 
         logger.debug("Created paper trade: entry={}, exit={}, pnl={}, pnlPct={}%",
                 signalDate, exitResult.exitDate, pnl, pnlPct);

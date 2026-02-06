@@ -98,4 +98,15 @@ public interface CandleRepository extends JpaRepository<Candle, Long> {
      */
     @Query("SELECT c FROM Candle c WHERE c.instrument.id = :instrumentId AND c.tradeDate <= :maxDate ORDER BY c.tradeDate DESC")
     List<Candle> findCandlesUpToDate(@Param("instrumentId") Long instrumentId, @Param("maxDate") LocalDate maxDate, Pageable pageable);
+
+    /**
+     * Check existence of candles for multiple instrument-date pairs.
+     * Used for batch idempotent checks during parallel Bhavcopy loading.
+     *
+     * @param instrumentIds list of instrument IDs
+     * @param tradeDates    corresponding list of trade dates
+     * @return list of instrument IDs that already have candles for the given dates
+     */
+    @Query("SELECT DISTINCT c.instrument.id FROM Candle c WHERE c.instrument.id IN :instrumentIds AND c.tradeDate IN :tradeDates")
+    List<Long> findExistingInstrumentIds(@Param("instrumentIds") List<Long> instrumentIds, @Param("tradeDates") List<LocalDate> tradeDates);
 }
